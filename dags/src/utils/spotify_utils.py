@@ -18,6 +18,15 @@ SPOTIFY_AUTH_MGR = SpotifyOAuth(
 
 
 def fetch_tokens(pg_hook: PostgresHook) -> dict:
+    """Fetch the Spotify access and refresh tokens for all users
+
+    Args:
+        pg_hook (PostgresHook): PostgresHook to connect to the database
+
+    Returns:
+        dict: The Spotify access and refresh tokens for all users
+            :: {user_id: {"access_token": str, "refresh_token": str}}
+    """
     tokens = {}
     with pg_hook.get_conn() as conn:
         with conn.cursor() as cursor:
@@ -38,6 +47,16 @@ def fetch_tokens(pg_hook: PostgresHook) -> dict:
 def refresh_access_token(
     user_id: int, refresh_token: str, pg_hook: PostgresHook
 ) -> str:
+    """Refresh a user's Spotify access token and update the database
+
+    Args:
+        user_id (int): The user's SongSwap ID
+        refresh_token (str): The user's Spotify refresh token
+        pg_hook (PostgresHook): PostgresHook to connect to the database
+
+    Returns:
+        str: The user's new Spotify access token
+    """
     new_token_info = _fetch_refreshed_access_token(refresh_token)
     new_access_token = new_token_info["access_token"]
     _set_refreshed_access_token(
@@ -47,6 +66,15 @@ def refresh_access_token(
 
 
 def _fetch_refreshed_access_token(refresh_token: str) -> dict:
+    """Fetch a new access token from Spotify using the refresh token
+
+    Args:
+        refresh_token (str): The user's Spotify refresh token
+
+    Returns:
+        dict: The user's new Spotify access token
+            :: {"access_token": str, "token_type": str, "expires_in": int, "scope": str}
+    """
     new_token_info = SPOTIFY_AUTH_MGR.refresh_access_token(refresh_token=refresh_token)
     return new_token_info
 
@@ -54,6 +82,13 @@ def _fetch_refreshed_access_token(refresh_token: str) -> dict:
 def _set_refreshed_access_token(
     user_id: int, new_access_token: str, pg_hook: PostgresHook
 ):
+    """Update the access token for a user in the database
+
+    Args:
+        user_id (int): The user's SongSwap ID
+        new_access_token (str): The user's new Spotify access token
+        pg_hook (PostgresHook): PostgresHook to connect to the database
+    """
     # Update the token in the database
     with pg_hook.get_conn() as conn:
         with conn.cursor() as cursor:
@@ -64,17 +99,23 @@ def _set_refreshed_access_token(
 
 
 def fetch_listening_history(
-    user_id: int, access_token: str, after: int = None, before: int = None
+    access_token: str, after: int = None, before: int = None
 ) -> dict:
-    """Fetches the listening history for a user from Spotify.
+    """Fetch the listening history for a user from Spotify.
     Optionally, provide a unix timestamp for after and/or before to filter the results.
+
+    Args:
+        access_token (str): The user's Spotify access token
+        after (int, optional): Unix timestamp in milliseconds of the lower-bound hour we want to fetch the listening history for. Defaults to None.
+        before (int, optional): Unix timestamp in milliseconds of the upper-bound hour we want to fetch the listening history for. Defaults to None.
+
+    Returns:
+        dict: The user's listening history
+            :: {"items": list, "next": str, "cursors": dict, "limit": int, "href": str}
+
     """
     sp = spotipy.Spotify(auth=access_token)
     # Log the fetching of the history
-    logger.info(f"Fetching listening history: user_id={user_id}")
-    #
     results = sp.current_user_recently_played(after=after, before=before)
-    logger.info(
-        f" Fetched history: user_id={user_id}, length len(items)={len(results['items'])}"
-    )
+    logger.info(f" Fetched history: length len(items)={len(results['items'])}")
     return results
