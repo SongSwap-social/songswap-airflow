@@ -7,6 +7,7 @@ from json import dumps, loads
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from src.utils.discord_utils import discord_notification_on_failure
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -103,31 +104,34 @@ def load_spotify_history(history: dict, after_timestamp: int = None):
         history (dict): JSON string of the listening history for a single user, as returned by `extract_spotify_history`
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
     """
+    from airflow.models import Variable
     from airflow.providers.amazon.aws.hooks.s3 import S3Hook
     from src.utils.s3_utils import upload_to_s3
 
-    logger.info(
-        f"Loading Spotify listening history for after_timestamp={after_timestamp}"
+    timestamp = datetime.fromtimestamp(int(after_timestamp / 1000)).strftime(
+        "%Y-%m-%d_%H"
     )
+    logger.info(
+        f"Loading Spotify listening history for after_timestamp={after_timestamp}, timestamp={timestamp}"
+    )
+    # Get bucket_name from Airflow Variable
+    bucket_name = Variable.get("bucket_name")
+
+    object_name = "history/spotify/user{user_id}/user{user_id}_spotify_{timestamp}.json"
     history = loads(history)  # Parse history from XCom string to dict
-    logger.info(f"history={history}")
+    logger.debug(f"history={history}")
     s3_hook = S3Hook(aws_conn_id="SongSwap_S3_PutOnly")
     # Upload all history data to S3
     for user_id in history:
         user_history = history[user_id]
         history_str = dumps(user_history)
-        logger.info(f"history_str={history_str}")
-        timestamp = datetime.fromtimestamp(int(after_timestamp / 1000)).strftime(
-            "%Y-%m-%d_%H"
-        )
-        bucket_name = f"songswap-history"
-        prefix = f"history/spotify/user{user_id}"
-        object_name = f"{prefix}/user{user_id}_spotify_{timestamp}.json"
+        logger.info(f"user_id={user_id} len_items={len(user_history['items'])}")
+        logger.debug(f"user_id={user_id}, history_str={history_str}")
         try:  # Try to upload the history to S3
             upload_to_s3(
                 data=history_str,
                 bucket_name=bucket_name,
-                object_name=object_name,
+                object_name=object_name.format(user_id=user_id, timestamp=timestamp),
                 s3_hook=s3_hook,
             )
         except ValueError as e:
@@ -136,7 +140,7 @@ def load_spotify_history(history: dict, after_timestamp: int = None):
 
 with DAG(
     dag_id="load_history",
-    description="DAG to load listening histories from Spotify and Apple Music",
+    description="DAG to load listening histories from Spotify to S3",
     schedule_interval="1 * * * *",  # Runs hourly at minute 1
     start_date=datetime(2023, 6, 2),
     catchup=False,
@@ -152,10 +156,12 @@ with DAG(
         .timestamp()  # Convert to Unix timestamp
         * 1000  # Convert to milliseconds
     )
+
     extract_spotify_history_task = PythonOperator(
         task_id="extract_spotify_history",
         python_callable=extract_spotify_history,
         op_kwargs={"after_timestamp": after_timestamp_int},
+        on_failure_callback=discord_notification_on_failure,
     )
 
     load_spotify_history_task = PythonOperator(
@@ -165,6 +171,7 @@ with DAG(
             "history": "{{ ti.xcom_pull(task_ids='extract_spotify_history') }}",
             "after_timestamp": after_timestamp_int,
         },
+        on_failure_callback=discord_notification_on_failure,
     )
 
     extract_spotify_history_task >> load_spotify_history_task
