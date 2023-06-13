@@ -1,5 +1,9 @@
+import logging
 from json import dumps
+
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+
+logger = logging.getLogger(__name__)
 
 
 def upload_to_s3(data: str, bucket_name: str, object_name: str, s3_hook: S3Hook):
@@ -13,6 +17,9 @@ def upload_to_s3(data: str, bucket_name: str, object_name: str, s3_hook: S3Hook)
         object_name (str): Name of the object to upload
         s3_hook (S3Hook): S3Hook to connect to the S3 bucket
     """
+    logger.info(f"Uploading to S3 bucket_name={bucket_name}, object_name={object_name}")
+    logger.debug(f"data={data}")
+
     if isinstance(data, dict):
         data = dumps(data)
     s3_hook.load_string(

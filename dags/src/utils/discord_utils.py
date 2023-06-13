@@ -2,10 +2,10 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from airflow.models import Variable
 from airflow.providers.discord.operators.discord_webhook import DiscordWebhookHook
 
-discord_webhook_endpoint = Variable.get("discord_webhook_endpoint")
+FAILED_TASK_CONNECTION_ID = "Discord_Notifier"
+FAILED_TASK_WEBHOOK_ENDPOINT_VARIABLE = "discord_webhook_endpoint"
 
 
 class DiscordEmbedWebhookHook(DiscordWebhookHook):
@@ -54,7 +54,7 @@ class DiscordEmbedWebhookHook(DiscordWebhookHook):
             payload["avatar_url"] = self.avatar_url
 
         payload["tts"] = self.tts
-        payload["content"] = "webhook"
+        payload["content"] = ""
         payload["embeds"] = self.embeds
         payload["attachments"] = []
 
@@ -115,7 +115,9 @@ def _create_failed_task_discord_embed(
 
 
 def discord_notification_on_failure(context: dict):
-    """Send a Discord notification when a task or DAG fails
+    """Task/DAG callback function to send a Discord notification upon failure
+
+    Pass this function to a task's or DAG's `on_failure_callback` parameter
 
     Args:
         context (dict): Context dictionary passed by Airflow
@@ -131,7 +133,7 @@ def discord_notification_on_failure(context: dict):
         exec_date=exec_date,
     )
 
-    failed_alert = DiscordEmbedWebhookHook(
-        http_conn_id="Discord_Notifier", embeds=[embed]
+    failure_alert = DiscordEmbedWebhookHook(
+        http_conn_id=FAILED_TASK_CONNECTION_ID, embeds=[embed]
     )
-    return failed_alert.execute()
+    return failure_alert.execute()

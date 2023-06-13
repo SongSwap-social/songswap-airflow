@@ -15,13 +15,6 @@ default_args = {
     "retry_delay": timedelta(minutes=1),
 }
 
-dag = DAG(
-    "spotipy_test",
-    default_args=default_args,
-    schedule_interval=timedelta(days=1),
-    tags=["songswap", "sanity"],
-)
-
 
 def verify_spotipy_installed():
     """Import spotipy to verify it's installed."""
@@ -41,16 +34,19 @@ def verify_environment_variables():
     assert environ.get("SPOTIFY_REDIRECT_URI"), "SPOTIFY_REDIRECT_URI not set"
 
 
-t1 = PythonOperator(
-    task_id="verify_spotipy_installed",
-    python_callable=verify_spotipy_installed,
-    dag=dag,
-)
-
-t2 = PythonOperator(
-    task_id="verify_environment_variables",
-    python_callable=verify_environment_variables,
-    dag=dag,
-)
-
-t1 >> t2
+with DAG(
+    "test_spotipy",
+    default_args=default_args,
+    schedule_interval=timedelta(days=1),
+    tags=["songswap", "sanity", "test"],
+    description="Verify that spotipy is installed and environment variables are set",
+    catchup=False,
+) as dag:
+    verify_spotipy_installed = PythonOperator(
+        task_id="verify_spotipy_installed",
+        python_callable=verify_spotipy_installed,
+    )
+    verify_environment_variables = PythonOperator(
+        task_id="verify_environment_variables",
+        python_callable=verify_environment_variables,
+    )
