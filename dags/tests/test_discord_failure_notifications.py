@@ -51,7 +51,7 @@ with DAG(
 
     context = {
         "task_instance": mock_task_instance,
-        "execution_date": datetime.utcnow(),
+        "data_interval_start": datetime.utcnow(),
     }
     test_failure_task = PythonOperator(
         task_id="test_failure_task",

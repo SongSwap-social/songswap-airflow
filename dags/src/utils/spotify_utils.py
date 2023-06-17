@@ -31,7 +31,7 @@ def fetch_tokens(pg_hook: PostgresHook) -> dict:
     with pg_hook.get_conn() as conn:
         with conn.cursor() as cursor:
             # Retrieve the current tokens for all users
-            query = "SELECT users.id, spotify_tokens.access_token, spotify_tokens.refresh_token FROM spotify_tokens INNER JOIN users ON users.id = spotify_tokens.id"
+            query = "SELECT u.id, st.access_token, st.refresh_token FROM \"SpotifyTokens\" as st INNER JOIN \"Users\" as u ON u.id = st.id"
 
             cursor.execute(query)
             user_tokens = cursor.fetchall()
@@ -92,8 +92,8 @@ def _set_refreshed_access_token(
     # Update the token in the database
     with pg_hook.get_conn() as conn:
         with conn.cursor() as cursor:
-            # UPDATE spotify_tokens SET access_token = %s WHERE id = %s
-            query = "UPDATE spotify_tokens SET access_token = %s WHERE id = %s"
+            # UPDATE SpotifyTokens SET access_token = %s WHERE id = %s
+            query = "UPDATE \"SpotifyTokens\" SET access_token = %s WHERE id = %s"
             cursor.execute(query, (new_access_token, user_id))
             conn.commit()
 

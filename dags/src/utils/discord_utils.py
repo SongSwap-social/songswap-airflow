@@ -125,7 +125,7 @@ def discord_notification_on_failure(context: dict):
     Returns:
         str: The response from the Discord API
     """
-    exec_date = context.get("execution_date")
+    exec_date = context.get("data_interval_start")
     embed = _create_failed_task_discord_embed(
         log_url=context.get("task_instance").log_url,
         dag_id=context.get("task_instance").dag_id,
