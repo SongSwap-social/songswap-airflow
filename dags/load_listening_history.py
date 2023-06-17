@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from json import dumps, loads
 
 from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator, ShortCircuitOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from src.utils.discord_utils import discord_notification_on_failure
 
@@ -55,7 +55,7 @@ def _fetch_listening_history(
     return history
 
 
-def extract_spotify_history(after_timestamp: int = None):
+def extract_spotify_history(after_timestamp: int = None) -> str:
     """Extracts listening history from Spotify for all users
 
     Returns a JSON string of the listening history for all users whose history is not empty.
@@ -65,6 +65,11 @@ def extract_spotify_history(after_timestamp: int = None):
             The hour should be the previous hour rounded down to the nearest hour. e.g., at 10am we want to fetch the
             listening history for 9am-10am. Defaults to None, which will fetch the 50 most recent items in the user's
             listening history.
+
+    Returns:
+        str: JSON string of the listening history for all users whose history is not empty.
+            :: {"user_id": {"items": [history_item, ...]}, ...}
+        None: If there is no listening history to load
     """
     logger.info(
         f"Extracting Spotify listening history for hour after_timestamp={after_timestamp}"
@@ -92,6 +97,10 @@ def extract_spotify_history(after_timestamp: int = None):
             history[user_id] = user_history
         except Exception as e:
             logger.error(f"Failed to process user {user_id}: {str(e)}")
+
+    if not history:  # Short circuit if there's no history to load
+        logger.info("No listening history to load")
+        return False
 
     # Convert the history dictionary to a JSON string before returning it
     return dumps(history)
@@ -157,7 +166,9 @@ with DAG(
         * 1000  # Convert to milliseconds
     )
 
-    extract_spotify_history_task = PythonOperator(
+    # Extract and load listening history for all users
+    # Short circuit if there's no history to load, skip the load task
+    extract_spotify_history_task = ShortCircuitOperator(
         task_id="extract_spotify_history",
         python_callable=extract_spotify_history,
         op_kwargs={"after_timestamp": after_timestamp_int},
