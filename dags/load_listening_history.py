@@ -106,12 +106,16 @@ def extract_spotify_history(after_timestamp: int = None) -> str:
     return dumps(history)
 
 
-def load_spotify_history(history: dict, after_timestamp: int = None):
-    """Loads listening history from Spotify for a single user to S3
+def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
+    """Loads listening history from Spotify to S3 for all users whose history is not empty
+
+    If the listening history for a user already exists in S3, it will not be overwritten.
+    TODO: If the upload fails, and reaches the max retries, the history will be saved locally and the task will fail.
 
     Args:
         history (dict): JSON string of the listening history for a single user, as returned by `extract_spotify_history`
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
+        context (dict): Context passed by Airfow
     """
     from airflow.models import Variable
     from airflow.providers.amazon.aws.hooks.s3 import S3Hook
@@ -121,7 +125,7 @@ def load_spotify_history(history: dict, after_timestamp: int = None):
         "%Y-%m-%d_%H"
     )
     logger.info(
-        f"Loading Spotify listening history for after_timestamp={after_timestamp}, timestamp={timestamp}"
+        f"Loading Spotify listening history to S3 for after_timestamp={after_timestamp}, timestamp={timestamp}"
     )
     # Get bucket_name from Airflow Variable
     bucket_name = Variable.get("bucket_name")
@@ -147,9 +151,43 @@ def load_spotify_history(history: dict, after_timestamp: int = None):
             logger.error(f"History for user {user_id} already exists: {str(e)}")
 
 
+def load_spotify_history_to_rds(history: dict, after_timestamp: int = None):
+    """Loads transformed listening history from Spotify of all users to RDS
+    Args:
+        history (dict): JSON string of the listening history for a single user, as returned by `extract_spotify_history`
+        after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
+    """
+    from airflow.providers.postgres.hooks.postgres import PostgresHook
+    from src.utils.history_utils import transform_data
+    from src.utils.rds_utils import insert_history_bulk
+
+    timestamp = datetime.fromtimestamp(int(after_timestamp / 1000)).strftime(
+        "%Y-%m-%d_%H"
+    )
+    logger.info(
+        f"Loading Spotify listening to RDS history for after_timestamp={after_timestamp}, timestamp={timestamp}"
+    )
+
+    history = loads(history)  # Parse history from XCom string to dict
+    logger.debug(f"history={history}")
+
+    # Transform history to a format that can be inserted into RDS
+    transformed_histories = []
+    for user_id in history:
+        user_history = history[user_id]
+        transformed_histories.append(
+            loads(transform_data(raw_data=user_history, user_id=user_id))
+        )
+
+    pg_hook = PostgresHook(postgres_conn_id="SongSwap_RDS")
+
+    # Insert history into RDS
+    insert_history_bulk(data_list=transformed_histories, pg_hook=pg_hook)
+
+
 with DAG(
     dag_id="load_history",
-    description="DAG to load listening histories from Spotify to S3",
+    description="DAG to load listening histories from Spotify to S3 and RDS PostgreSQL",
     schedule_interval="1 * * * *",  # Runs hourly at minute 1
     start_date=datetime(2023, 6, 2),
     catchup=False,
@@ -173,11 +211,12 @@ with DAG(
         python_callable=extract_spotify_history,
         op_kwargs={"after_timestamp": after_timestamp_int},
         on_failure_callback=discord_notification_on_failure,
+        retries=1,
     )
 
-    load_spotify_history_task = PythonOperator(
-        task_id="load_spotify_history",
-        python_callable=load_spotify_history,
+    load_spotify_history_to_s3_task = PythonOperator(
+        task_id="load_spotify_history_to_s3",
+        python_callable=load_spotify_history_to_s3,
         op_kwargs={
             "history": "{{ ti.xcom_pull(task_ids='extract_spotify_history') }}",
             "after_timestamp": after_timestamp_int,
@@ -185,4 +224,17 @@ with DAG(
         on_failure_callback=discord_notification_on_failure,
     )
 
-    extract_spotify_history_task >> load_spotify_history_task
+    load_spotify_history_to_rds_task = PythonOperator(
+        task_id="load_spotify_history_to_rds",
+        python_callable=load_spotify_history_to_rds,
+        op_kwargs={
+            "history": "{{ ti.xcom_pull(task_ids='extract_spotify_history') }}",
+            "after_timestamp": after_timestamp_int,
+        },
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    (
+        extract_spotify_history_task
+        >> [load_spotify_history_to_s3_task, load_spotify_history_to_rds_task]
+    )

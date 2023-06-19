@@ -8,12 +8,12 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from src.utils.discord_utils import discord_notification_on_failure
 from src.utils.history_utils import (
-    insert_history,
     transform_data,
     verify_inserted_history,
     verify_transformed_data_keys,
     verify_transformed_data_values,
 )
+from src.utils.rds_utils import insert_history
 
 logger = logging.getLogger(__name__)
 default_args = {
@@ -151,6 +151,7 @@ with DAG(
     tags=["songswap", "test", "unit"],
     catchup=False,
     on_failure_callback=discord_notification_on_failure,
+    description="Test that the listening history is transformed and loaded into the database correctly.",
 ) as dag:
     filename_root = "user_spotify"
     json_data = load_test_data(f"{filename_root}.json")

@@ -1,10 +1,11 @@
 """Utility functions for transforming and loading listening history data to RDS."""
 import logging
 from json import dumps, loads
-from typing import List
+from typing import List, Set, Tuple, Union
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from dateutil.parser import parse
+from src.utils.rds_utils import fetch_query_results_in_chunks, get_database_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
 
         data["TrackPopularity"].append(
             {
-                "track_id": track_id,
+                "id": track_id,
                 "date": played_at,
                 "popularity": track_popularity,
             }
@@ -102,9 +103,7 @@ def verify_transformed_data_keys(data: dict):
     Args:
         data (dict): The transformed data to be verified.
     """
-    # Try to convert str to dict
-    if isinstance(data, str):
-        data = loads(data)
+    data = parse_data(data)
 
     logger.info(f"Verifying transformed data keys: {data}")
 
@@ -144,7 +143,7 @@ def verify_transformed_data_keys(data: dict):
         f"{data['Tracks'][0].keys()}"
     )
 
-    expected_track_popularity_keys = ["track_id", "date", "popularity"]
+    expected_track_popularity_keys = ["id", "date", "popularity"]
     assert set(data["TrackPopularity"][0].keys()) == set(
         expected_track_popularity_keys,
     ), (
@@ -161,163 +160,142 @@ def verify_transformed_data_keys(data: dict):
     )
 
 
-# TODO: HORRIBLY inefficient. Fix this. ORM is nice, but the decoupling is not worth it yet.
 def verify_transformed_data_values(data: dict):
     """Verify that the transformed data contains the correct values.
 
     Args:
         data (dict): The transformed data to be verified.
     """
-    if isinstance(data, str):
-        data = loads(data)
+    data = parse_data(data)
 
     logger.info(f"Verifying transformed data values: {data}")
-    # Verify that the values are not empty
-    for table in data.values():
-        assert len(table) > 0, f"Table {table} is empty"
 
-    # Verify that the values are all dictionaries
-    for table in data.values():
+    for table_name, table in data.items():
+        # Verify that the values are not empty
+        assert len(table) > 0, f"Table {table_name} is empty"
+
         for row in table:
+            # Verify that the values are all dictionaries
             assert isinstance(
                 row, dict
-            ), f"Table {table} contains non-dictionary values: {row}"
+            ), f"Table {table_name} contains non-dictionary values: {row}"
 
-    # Verify that the values are not null
-    for table in data.values():
-        for row in table:
-            for value in row.values():
-                assert value is not None, f"Table {table} contains null values: {row}"
+            # Verify that the values are not null
+            for field, value in row.items():
+                assert (
+                    value is not None
+                ), f"Table {table_name}, Row {row} contains null values at field: {field}"
 
 
-def insert_history(data: dict, pg_hook: PostgresHook):
-    """Insert history data into the database.
+def generate_bulk_insert_query(table: str, data: List[dict]) -> str:
+    """Generate a SQL query for inserting many rows into a table.
 
     Args:
-        data (dict): The data to be inserted. It should be a dictionary with keys
-            "artists", "tracks", "artist_tracks" and "history", each of which
-            should map to a list of dictionaries.
-        pg_hook (PostgresHook): Hook to connect to the database.
-    """
+        table (str): The name of the table to insert into.
+        data (List[dict]): The data to be inserted. It should be a list of dictionaries.
 
+    Returns:
+        str: SQL query string.
+    """
+    columns = data[0].keys()
+    query = f"INSERT INTO \"{table}\" ({', '.join(columns)}) VALUES %s ON CONFLICT DO NOTHING"
+    return query
+
+
+def parse_data(data: Union[dict, str]) -> dict:
+    """Parse data from JSON string to dictionary.
+
+    Args:
+        data (Union[dict, str]): The data to be parsed.
+            e.g. :: {"History": [{"user_id": 1, "track_id": 1, "played_at": "2021-01-01 00:00:00"}]}
+
+                Returns:
+        dict: The parsed data.
+
+    """
     if isinstance(data, str):
         data = loads(data)
-
-    conn = pg_hook.get_conn()
-    cursor = conn.cursor()
-
-    # Define a helper function for bulk inserting
-    def bulk_insert(table: str, data: List[dict]):
-        """Bulk insert data into a table.
-
-        Args:
-            table (str): The name of the table to insert into.
-            data (List[dict]): The data to be inserted. It should be a list of dictionaries.
-        """
-        from psycopg2.extras import execute_values
-
-        if data:
-            columns = data[0].keys()
-            query = f"INSERT INTO \"{table}\" ({', '.join(columns)}) VALUES %s ON CONFLICT DO NOTHING"
-            logger.info(f"Query: {query}")
-
-            # Convert the dictionaries to tuples
-            tuple_data = [tuple(item.values()) for item in data]
-            logger.info(f"Inserting data into table {table}: {tuple_data}")
-
-            execute_values(cursor, query, tuple_data)
-
-    # Insert into each table
-    try:
-        bulk_insert("Artists", data.get("Artists"))
-        bulk_insert("Tracks", data.get("Tracks"))
-        bulk_insert("ArtistTracks", data.get("ArtistTracks"))
-        bulk_insert("History", data.get("History"))
-        conn.commit()
-
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Failed to insert data: {str(e)}")
-        raise e
-
-    finally:
-        cursor.close()
-        conn.close()
+    return data
 
 
-def verify_inserted_history(transformed_data: dict, pg_hook: PostgresHook):
-    """Verify that RDS contains the transformed data.
+def prepare_history_data_for_comparison(data: dict) -> Set[Tuple]:
+    """Prepare history data for comparison.
 
-    This function will query the database and verify that the data matches the
-    transformed data. It specifically checks the 'History' table.
+    Args:
+        data (dict): The data to be prepared.
 
-    It should be run after insert_history().
+    Returns:
+        Set[Tuple]: A set of tuples containing the user_id, track_id, and played_at
+            values from the history data.
     """
-    if isinstance(transformed_data, str):
-        transformed_data = loads(transformed_data)
-
-    conn = pg_hook.get_conn()
-    cursor = conn.cursor()
-
-    # Prepare history data for comparison
-    # dateutil.parser.parse converts `played_at` strings to datetime objects
     history_data = set(
         (
             item["user_id"],
             item["track_id"],
             parse(item["played_at"]).replace(tzinfo=None),
         )
-        for item in transformed_data["History"]
+        for item in data["History"]
     )
+    return history_data
 
-    # Define a helper function for querying in chunks
-    def query_table_in_chunks(table: str, where_in_data: str, chunk_size: int = 1000):
-        """Query a table in chunks.
 
-        Args:
-            table (str): The name of the table to query.
-            where_in_data (str): WHERE clause for the SQL statement.
-            chunk_size (int): The number of rows to fetch at once.
+def construct_where_clause(data: dict) -> str:
+    """Construct a WHERE clause for the select query.
 
-        Returns:
-            Set[tuple]: The queried data.
-        """
-        # Get the count of relevant rows
-        count_query = f'SELECT COUNT(*) FROM "{table}" WHERE {where_in_data}'
-        cursor.execute(count_query)
-        total_rows = cursor.fetchone()[0]
+    Args:
+        data (dict): The data to be used to construct the WHERE clause.
+            e.g. :: {"History": [{"user_id": 1, "track_id": 1, "played_at": "2021-01-01 00:00:00"}]}
 
-        queried_data = set()
-
-        # Fetch and compare the data in chunks
-        for offset in range(0, total_rows, chunk_size):
-            query = f"""
-                SELECT "user_id", "track_id", "played_at"
-                FROM "{table}"
-                WHERE {where_in_data}
-                LIMIT {chunk_size} OFFSET {offset}
-            """
-            cursor.execute(query)
-            queried_data.update(cursor.fetchall())
-
-        return queried_data
-
-    # Prepare WHERE clause
-    user_ids = ", ".join(
-        map(str, set(item["user_id"] for item in transformed_data["History"]))
-    )
-    played_at_values = ", ".join(
-        f"'{item['played_at']}'" for item in transformed_data["History"]
-    )
+    Returns:
+        str: The WHERE clause.
+            e.g. :: "user_id IN (1, 2) AND played_at IN ('2021-01-01 00:00:00', '2021-01-02 00:00:00')"
+    """
+    user_ids = ", ".join(map(str, set(item["user_id"] for item in data["History"])))
+    played_at_values = ", ".join(f"'{item['played_at']}'" for item in data["History"])
     where_in_data = f"user_id IN ({user_ids}) AND played_at IN ({played_at_values})"
+    return where_in_data
 
-    # Query History table and compare the results
+
+def construct_select_query(table: str, where_clause: str) -> str:
+    """Construct a SELECT query.
+
+    Args:
+        table (str): The name of the table to select from.
+        where_clause (str): The WHERE clause to be used in the query.
+
+    Returns:
+        str: The SELECT query.
+            e.g. ::
+                "SELECT "user_id", "track_id", "played_at"
+                FROM "History"
+                WHERE user_id IN (1, 2) AND played_at IN ('2021-01-01 00:00:00', '2021-01-02 00:00:00')"
+    """
+    query = (
+        f'SELECT "user_id", "track_id", "played_at" FROM "{table}" WHERE {where_clause}'
+    )
+    return query
+
+
+def assert_matching_data(data1: Set[Tuple], data2: Set[Tuple]):
+    """Assert that the transformed data and queried data match."""
+    assert data1 == data2, (
+        "Transformed data and queried data do not match: " f"{data1} != {data2}"
+    )
+
+
+# TODO Should just pass the `pg_cursor` instead of the `pg_hook`
+def verify_inserted_history(transformed_data: dict, pg_hook: PostgresHook):
+    """Verify that the transformed data has been inserted into the database."""
+    transformed_data = parse_data(transformed_data)
+    conn, cursor = get_database_cursor(pg_hook)
+
+    history_data = prepare_history_data_for_comparison(transformed_data)
+    where_clause = construct_where_clause(transformed_data)
+    query = construct_select_query("History", where_clause)
+
     try:
-        queried_history = query_table_in_chunks("History", where_in_data)
-        assert history_data == queried_history, (
-            "Transformed data and queried data do not match: "
-            f"{history_data} != {queried_history}"
-        )
+        queried_history = fetch_query_results_in_chunks(cursor, query)
+        assert_matching_data(history_data, queried_history)
 
     except Exception as e:
         logger.error(f"Failed to query data: {str(e)}")
