@@ -55,10 +55,10 @@ def _fetch_listening_history(
     return history
 
 
-def extract_spotify_history(after_timestamp: int = None) -> str:
+def extract_spotify_history(after_timestamp: int = None) -> dict:
     """Extracts listening history from Spotify for all users
 
-    Returns a JSON string of the listening history for all users whose history is not empty.
+    Returns a dict of the listening history for all users whose history is not empty.
 
     Args:
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
@@ -67,9 +67,8 @@ def extract_spotify_history(after_timestamp: int = None) -> str:
             listening history.
 
     Returns:
-        str: JSON string of the listening history for all users whose history is not empty.
+        dict: The listening history for all users whose history is not empty
             :: {"user_id": {"items": [history_item, ...]}, ...}
-        None: If there is no listening history to load
     """
     logger.info(
         f"Extracting Spotify listening history for hour after_timestamp={after_timestamp}"
@@ -102,8 +101,7 @@ def extract_spotify_history(after_timestamp: int = None) -> str:
         logger.info("No listening history to load")
         return False
 
-    # Convert the history dictionary to a JSON string before returning it
-    return dumps(history)
+    return history
 
 
 def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
@@ -131,7 +129,6 @@ def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
     bucket_name = Variable.get("bucket_name")
 
     object_name = "history/spotify/user{user_id}/user{user_id}_spotify_{timestamp}.json"
-    history = loads(history)  # Parse history from XCom string to dict
     logger.debug(f"history={history}")
     s3_hook = S3Hook(aws_conn_id="SongSwap_S3_PutOnly")
     # Upload all history data to S3
@@ -168,7 +165,6 @@ def load_spotify_history_to_rds(history: dict, after_timestamp: int = None):
         f"Loading Spotify listening to RDS history for after_timestamp={after_timestamp}, timestamp={timestamp}"
     )
 
-    history = loads(history)  # Parse history from XCom string to dict
     logger.debug(f"history={history}")
 
     # Transform history to a format that can be inserted into RDS
@@ -218,7 +214,7 @@ with DAG(
         task_id="load_spotify_history_to_s3",
         python_callable=load_spotify_history_to_s3,
         op_kwargs={
-            "history": "{{ ti.xcom_pull(task_ids='extract_spotify_history') }}",
+            "history": extract_spotify_history_task.output,
             "after_timestamp": after_timestamp_int,
         },
         on_failure_callback=discord_notification_on_failure,
@@ -228,7 +224,7 @@ with DAG(
         task_id="load_spotify_history_to_rds",
         python_callable=load_spotify_history_to_rds,
         op_kwargs={
-            "history": "{{ ti.xcom_pull(task_ids='extract_spotify_history') }}",
+            "history": extract_spotify_history_task.output,
             "after_timestamp": after_timestamp_int,
         },
         on_failure_callback=discord_notification_on_failure,

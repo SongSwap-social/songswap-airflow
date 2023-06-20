@@ -174,18 +174,14 @@ with DAG(
     t_validate_transform_data_key_format = PythonOperator(
         task_id="validate_transform_data_key_format",
         python_callable=validate_transform_data_key_format,
-        op_kwargs={
-            "transformed_data": "{{ ti.xcom_pull(task_ids='test_transform_data') }}"
-        },
+        op_kwargs={"transformed_data": t_test_transform_data.output},
     )
 
     # Validate that the values in the transformed data are correct
     t_validate_transform_data_value_format = PythonOperator(
         task_id="validate_transform_data_value_format",
         python_callable=validate_transform_data_value_format,
-        op_kwargs={
-            "transformed_data": "{{ ti.xcom_pull(task_ids='test_transform_data') }}"
-        },
+        op_kwargs={"transformed_data": t_test_transform_data.output},
     )
 
     # Insert the data into the database
@@ -193,7 +189,7 @@ with DAG(
         task_id="test_insert_history",
         python_callable=test_insert_history,
         op_kwargs={
-            "transformed_data": "{{ ti.xcom_pull(task_ids='test_transform_data') }}",
+            "transformed_data": t_test_transform_data.output,
             "postgres_hook": postgres_hook,
         },
     )
@@ -203,7 +199,7 @@ with DAG(
         task_id="validate_inserted_history",
         python_callable=verify_data_inserted_correctly,
         op_kwargs={
-            "transformed_data": "{{ ti.xcom_pull(task_ids='test_transform_data') }}",
+            "transformed_data": t_test_transform_data.output,
             "postgres_hook": postgres_hook,
         },
     )
@@ -213,7 +209,7 @@ with DAG(
         task_id="test_insert_history_again",
         python_callable=test_insert_history,
         op_kwargs={
-            "transformed_data": "{{ ti.xcom_pull(task_ids='test_transform_data') }}",
+            "transformed_data": t_test_transform_data.output,
             "postgres_hook": postgres_hook,
         },
     )
