@@ -82,3 +82,10 @@ with DAG(
         task_id="delete_from_s3_test",
         python_callable=delete_from_s3_test,
     )
+
+    (
+        verify_bucket_name_variable
+        >> upload_to_s3_test
+        >> read_from_s3_test
+        >> delete_from_s3_test
+    )
