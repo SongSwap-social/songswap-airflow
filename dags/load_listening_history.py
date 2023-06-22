@@ -1,13 +1,16 @@
-# dags/dags/load_listening_history.py
+# dags/load_listening_history.py
 
 import logging
 from datetime import datetime, timedelta
 from json import dumps, loads
+from traceback import format_exc
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from src.utils.discord_utils import discord_notification_on_failure
+from src.utils.file_utils import TMP_DIR, delete_file, save_json_file
+from src.utils.s3_utils import upload_to_s3
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,6 +58,43 @@ def _fetch_listening_history(
     return history
 
 
+def calculate_timestamp() -> int:
+    """Calculates the after_timestamp for the previous hour rounded down to the nearest hour
+
+    Return a unix timestamp for the hour that we want to fetch the listening history for.
+    The hour should be the previous hour rounded down to the nearest hour.
+    e.g., at 10am we want to fetch the listening history for 9am-10am
+
+    Returns:
+        int: Unix timestamp in milliseconds of the hour we want to fetch the listening history for
+    """
+    after_timestamp_int = int(
+        (datetime.utcnow() - timedelta(hours=1))  # Previous hour
+        .replace(minute=0, second=0, microsecond=0)  # Round down to the nearest hour
+        .timestamp()  # Convert to Unix timestamp
+        * 1000  # Convert to milliseconds
+    )
+    return after_timestamp_int
+
+
+def _timestamp_to_string(after_timestamp: int) -> str:
+    """Converts a Unix timestamp in milliseconds to a string in the format %Y-%m-%d_%H
+
+    Args:
+        after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
+        ::  1627776000000
+
+    Returns:
+        str: String in the format %Y-%m-%d_%H
+        ::  2021-08-01_00
+    """
+    string_timestamp = datetime.fromtimestamp(int(after_timestamp / 1000)).strftime(
+        "%Y-%m-%d_%H"
+    )
+    logger.info(f"Converted timestamp {after_timestamp} to string {string_timestamp}")
+    return string_timestamp
+
+
 def extract_spotify_history(after_timestamp: int = None) -> dict:
     """Extracts listening history from Spotify for all users
 
@@ -96,6 +136,7 @@ def extract_spotify_history(after_timestamp: int = None) -> dict:
             history[user_id] = user_history
         except Exception as e:
             logger.error(f"Failed to process user {user_id}: {str(e)}")
+            logger.error(format_exc())
 
     if not history:  # Short circuit if there's no history to load
         logger.info("No listening history to load")
@@ -108,8 +149,10 @@ def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
     """Loads listening history from Spotify to S3 for all users whose history is not empty
 
     If the listening history for a user already exists in S3, it will not be overwritten.
-    TODO: If the upload fails, and reaches the max retries, the history will be saved locally and the task will fail.
-
+    If the upload fails, the history data will be saved locally.
+    # TODO, only save locally if the upload fails due to a network error (botocore.exceptions.ClientError)
+        e.g. botocore.exceptions.ClientError: An error occurred (403) when calling the HeadObject operation: Forbidden
+            This error occurs due to malformed headers, which is caused by a network error
     Args:
         history (dict): JSON string of the listening history for a single user, as returned by `extract_spotify_history`
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
@@ -117,35 +160,40 @@ def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
     """
     from airflow.models import Variable
     from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-    from src.utils.s3_utils import upload_to_s3
+    from src.utils.s3_utils import generate_object_name, upload_to_s3
 
-    timestamp = datetime.fromtimestamp(int(after_timestamp / 1000)).strftime(
-        "%Y-%m-%d_%H"
-    )
+    timestamp = _timestamp_to_string(after_timestamp)
     logger.info(
         f"Loading Spotify listening history to S3 for after_timestamp={after_timestamp}, timestamp={timestamp}"
     )
     # Get bucket_name from Airflow Variable
     bucket_name = Variable.get("bucket_name")
 
-    object_name = "history/spotify/user{user_id}/user{user_id}_spotify_{timestamp}.json"
     logger.debug(f"history={history}")
     s3_hook = S3Hook(aws_conn_id="SongSwap_S3_PutOnly")
     # Upload all history data to S3
     for user_id in history:
         user_history = history[user_id]
-        history_str = dumps(user_history)
+        user_object_name = generate_object_name(user_id, timestamp)
         logger.info(f"user_id={user_id} len_items={len(user_history['items'])}")
-        logger.debug(f"user_id={user_id}, history_str={history_str}")
         try:  # Try to upload the history to S3
+            history_str = dumps(user_history)
+            logger.debug(f"user_id={user_id}, history_str={history_str}")
             upload_to_s3(
                 data=history_str,
                 bucket_name=bucket_name,
-                object_name=object_name.format(user_id=user_id, timestamp=timestamp),
+                object_name=user_object_name,
                 s3_hook=s3_hook,
             )
         except ValueError as e:
-            logger.error(f"History for user {user_id} already exists: {str(e)}")
+            logger.error(f"History already exists for user {user_id}: {str(e)}")
+        except Exception as e:
+            logger.error(
+                f"Failed to upload history for user {user_id}, saving JSON data locally: {str(e)}"
+            )
+            # Output a more verbose error message to give more insights into the error, include the traceback
+            logger.error(format_exc())
+            save_json_file(json_data=user_history, file_path=TMP_DIR + user_object_name)
 
 
 def load_spotify_history_to_rds(history: dict, after_timestamp: int = None):
@@ -158,9 +206,7 @@ def load_spotify_history_to_rds(history: dict, after_timestamp: int = None):
     from src.utils.history_utils import transform_data
     from src.utils.rds_utils import insert_history_bulk
 
-    timestamp = datetime.fromtimestamp(int(after_timestamp / 1000)).strftime(
-        "%Y-%m-%d_%H"
-    )
+    timestamp = _timestamp_to_string(after_timestamp)
     logger.info(
         f"Loading Spotify listening to RDS history for after_timestamp={after_timestamp}, timestamp={timestamp}"
     )
@@ -181,6 +227,41 @@ def load_spotify_history_to_rds(history: dict, after_timestamp: int = None):
     insert_history_bulk(data_list=transformed_histories, pg_hook=pg_hook)
 
 
+def load_local_files_to_s3():
+    """Loads all local files to S3"""
+    from pathlib import Path
+
+    from airflow.models import Variable
+    from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+
+    bucket_name = Variable.get("bucket_name")
+    local_dir = Path(TMP_DIR) / "history/spotify"
+    files = [
+        (user_dir, user_json)
+        for user_dir in local_dir.iterdir()
+        for user_json in user_dir.iterdir()
+    ]
+    logger.info(f"Uploading {len(files)} local files to S3")
+    s3_hook = S3Hook(aws_conn_id="SongSwap_S3_PutOnly")
+
+    for user_dir, user_json in files:
+        local_file_path = local_dir / user_dir / user_json
+        data_str = local_file_path.read_text()
+        object_name = str(local_file_path).replace(str(TMP_DIR), "", 1)
+        try:
+            logger.info(
+                f"Attempting to upload to S3 bucket: local_file_path={local_file_path}"
+            )
+            upload_to_s3(data_str, bucket_name, object_name, s3_hook)
+            logger.info(f"Successfully uploaded to S3. Deleting local file...")
+            delete_file(str(local_file_path))
+        except ValueError as e:
+            logger.error(f"File already exists in S3: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to upload local file {object_name} to S3: {str(e)}")
+            logger.error(format_exc())
+
+
 with DAG(
     dag_id="load_history",
     description="DAG to load listening histories from Spotify to S3 and RDS PostgreSQL",
@@ -189,15 +270,10 @@ with DAG(
     catchup=False,
     tags=["songswap"],
 ) as dag:
-    # Timestamp of the hour we want to fetch the listening history for
-    # The hour should be the previous hour rounded down to the nearest hour
-    # Unix timestamp as an integer
-    # e.g., at 10am we want to fetch the listening history for 9am-10am
-    after_timestamp_int = int(
-        (datetime.utcnow() - timedelta(hours=1))  # Previous hour
-        .replace(minute=0, second=0, microsecond=0)  # Round down to the nearest hour
-        .timestamp()  # Convert to Unix timestamp
-        * 1000  # Convert to milliseconds
+    calculate_timestamp_task = PythonOperator(
+        task_id="calculate_timestamp",
+        python_callable=calculate_timestamp,
+        on_failure_callback=discord_notification_on_failure,
     )
 
     # Extract and load listening history for all users
@@ -205,7 +281,7 @@ with DAG(
     extract_spotify_history_task = ShortCircuitOperator(
         task_id="extract_spotify_history",
         python_callable=extract_spotify_history,
-        op_kwargs={"after_timestamp": after_timestamp_int},
+        op_kwargs={"after_timestamp": calculate_timestamp_task.output},
         on_failure_callback=discord_notification_on_failure,
         retries=1,
     )
@@ -215,7 +291,7 @@ with DAG(
         python_callable=load_spotify_history_to_s3,
         op_kwargs={
             "history": extract_spotify_history_task.output,
-            "after_timestamp": after_timestamp_int,
+            "after_timestamp": calculate_timestamp_task.output,
         },
         on_failure_callback=discord_notification_on_failure,
     )
@@ -225,12 +301,21 @@ with DAG(
         python_callable=load_spotify_history_to_rds,
         op_kwargs={
             "history": extract_spotify_history_task.output,
-            "after_timestamp": after_timestamp_int,
+            "after_timestamp": calculate_timestamp_task.output,
         },
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    load_local_files_to_s3_task = PythonOperator(
+        task_id="load_local_files_to_s3",
+        python_callable=load_local_files_to_s3,
         on_failure_callback=discord_notification_on_failure,
     )
 
     (
         extract_spotify_history_task
-        >> [load_spotify_history_to_s3_task, load_spotify_history_to_rds_task]
+        >> load_spotify_history_to_s3_task
+        >> load_local_files_to_s3_task
     )
+
+    (extract_spotify_history_task >> load_spotify_history_to_rds_task)
