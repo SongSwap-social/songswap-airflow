@@ -105,6 +105,11 @@ def verify_data_inserted_correctly(transformed_data: dict, postgres_hook: Postgr
 def cleanup_test_data(postgres_hook: PostgresHook, user_id: int):
     """Cleanup the inserted test data from the database."""
 
+    logger.info("Cleaning up test data...")
+    logger.warn(
+        "Artifacts: This task only removes the History, not the Track, Artist, TrackImages, etc."
+    )
+
     def verify_test_data_deleted():
         """Verify that the test data was deleted from the database."""
         try:
@@ -151,7 +156,9 @@ with DAG(
     tags=["songswap", "test", "unit"],
     catchup=False,
     on_failure_callback=discord_notification_on_failure,
-    description="Test that the listening history is transformed and loaded into the database correctly.",
+    description="Test that the listening history is transformed and loaded into the database correctly. \
+        NOTE: This DAG is not meant to be run on a schedule. \
+        This DAG only removes the History, not the Track, Artist, TrackImages, etc.",
 ) as dag:
     filename_root = "user_spotify"
     json_data = load_test_data(f"{filename_root}.json")

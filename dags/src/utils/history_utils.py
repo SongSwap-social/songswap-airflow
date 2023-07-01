@@ -29,6 +29,8 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
         "ArtistTracks": [],
         "TrackPopularity": [],
         "History": [],
+        "TrackImages": [],
+        "TrackPreviews": [],
     }
 
     # Transform raw_data
@@ -40,10 +42,13 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
             continue
 
         artists = track.get("artists")
+        album = track.get("album")
+        images = album.get("images")
         track_id: str = track.get("id")
         track_name: str = track.get("name")
         track_duration_ms = track.get("duration_ms")
         track_popularity = track.get("popularity")
+        preview_url = track.get("preview_url")
         played_at = track_played.get("played_at")
 
         for idx, artist in enumerate(artists):
@@ -82,6 +87,28 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
             }
         )
 
+        for image in images:
+            image: dict
+            height = image.get("height")
+            width = image.get("width")
+            url = image.get("url")
+
+            data["TrackImages"].append(
+                {
+                    "id": track_id,
+                    "height": height,
+                    "width": width,
+                    "url": url,
+                }
+            )
+
+        data["TrackPreviews"].append(
+            {
+                "id": track_id,
+                "url": preview_url,
+            }
+        )
+
         data["History"].append(
             {
                 "user_id": user_id,  # Composite primary key
@@ -107,13 +134,15 @@ def verify_transformed_data_keys(data: dict):
 
     logger.info(f"Verifying transformed data keys: {data}")
 
-    assert len(data) == 5, f"Transformed data should contain 5 tables: {data.keys()}"
+    assert len(data) == 7, f"Transformed data should contain 5 tables: {data.keys()}"
     expected_table_keys = [  # Expected table names
         "Artists",
         "Tracks",
         "ArtistTracks",
         "TrackPopularity",
         "History",
+        "TrackImages",
+        "TrackPreviews",
     ]
 
     # Verify that the expected table keys are present
@@ -150,6 +179,20 @@ def verify_transformed_data_keys(data: dict):
         f"Table 'TrackPopularity' should contain the following columns: "
         f"{expected_track_popularity_keys}, but instead contains "
         f"{data['TrackPopularity'][0].keys()}"
+    )
+
+    expected_track_image_keys = ["id", "height", "width", "url"]
+    assert set(data["TrackImages"][0].keys()) == set(expected_track_image_keys), (
+        f"Table 'TrackImages' should contain the following columns: "
+        f"{expected_track_image_keys}, but instead contains "
+        f"{data['TrackImages'][0].keys()}"
+    )
+
+    expected_track_preview_keys = ["id", "url"]
+    assert set(data["TrackPreviews"][0].keys()) == set(expected_track_preview_keys), (
+        f"Table 'TrackPreviews' should contain the following columns: "
+        f"{expected_track_preview_keys}, but instead contains "
+        f"{data['TrackPreviews'][0].keys()}"
     )
 
     expected_history_keys = ["user_id", "track_id", "played_at"]
