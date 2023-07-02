@@ -203,8 +203,7 @@ def load_spotify_history_to_rds(history: dict, after_timestamp: int = None):
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
     """
     from airflow.providers.postgres.hooks.postgres import PostgresHook
-    from src.utils.history_utils import transform_data
-    from src.utils.rds_utils import insert_history_bulk
+    from src.utils.history_utils import transform_data, insert_history_bulk
 
     timestamp = _timestamp_to_string(after_timestamp)
     logger.info(

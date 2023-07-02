@@ -12,8 +12,8 @@ from src.utils.history_utils import (
     verify_inserted_history,
     verify_transformed_data_keys,
     verify_transformed_data_values,
+    insert_history_bulk,
 )
-from src.utils.rds_utils import insert_history
 
 logger = logging.getLogger(__name__)
 default_args = {
@@ -90,7 +90,7 @@ def validate_transform_data_value_format(transformed_data: dict):
 
 def test_insert_history(transformed_data: dict, postgres_hook: PostgresHook):
     """Test that the data is inserted into the database correctly."""
-    insert_history(transformed_data, postgres_hook)
+    insert_history_bulk(transformed_data, postgres_hook)
 
 
 def verify_data_inserted_correctly(transformed_data: dict, postgres_hook: PostgresHook):
@@ -152,7 +152,7 @@ def cleanup_test_data(postgres_hook: PostgresHook, user_id: int):
 with DAG(
     "test_rds_load_history",
     default_args=default_args,
-    schedule_interval="@once",
+    schedule_interval=None,
     tags=["songswap", "test", "unit"],
     catchup=False,
     on_failure_callback=discord_notification_on_failure,
