@@ -1,5 +1,6 @@
 import logging
 from os import environ
+from typing import List
 
 import spotipy
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -31,7 +32,7 @@ def fetch_tokens(pg_hook: PostgresHook) -> dict:
     with pg_hook.get_conn() as conn:
         with conn.cursor() as cursor:
             # Retrieve the current tokens for all users
-            query = "SELECT u.id, st.access_token, st.refresh_token FROM \"SpotifyTokens\" as st INNER JOIN \"Users\" as u ON u.id = st.id"
+            query = 'SELECT u.id, st.access_token, st.refresh_token FROM "SpotifyTokens" as st INNER JOIN "Users" as u ON u.id = st.id'
 
             cursor.execute(query)
             user_tokens = cursor.fetchall()
@@ -93,7 +94,7 @@ def _set_refreshed_access_token(
     with pg_hook.get_conn() as conn:
         with conn.cursor() as cursor:
             # UPDATE SpotifyTokens SET access_token = %s WHERE id = %s
-            query = "UPDATE \"SpotifyTokens\" SET access_token = %s WHERE id = %s"
+            query = 'UPDATE "SpotifyTokens" SET access_token = %s WHERE id = %s'
             cursor.execute(query, (new_access_token, user_id))
             conn.commit()
 
@@ -119,3 +120,20 @@ def fetch_listening_history(
     results = sp.current_user_recently_played(after=after, before=before)
     logger.info(f" Fetched history: length len(items)={len(results['items'])}")
     return results
+
+
+def fetch_artists_data(artist_ids: List[str]) -> dict:
+    """Fetches artist data from Spotify for a list of artist IDs.
+
+    Args:
+        artist_ids (list): List of artist IDs to fetch data for.
+
+    Returns:
+        list: List of artist data.
+            :: {"artists": [{"id": str, "name": str, "genres": list, "popularity": int, "followers": int, "date": str}]}
+            The "date" key is added to the dictionary for each artist and contains the current UTC date in the format: "2023-06-17 03:49:27.234".
+    """
+    sp = spotipy.Spotify(oauth_manager=SPOTIFY_AUTH_MGR)
+    artists_data: dict = sp.artists(artist_ids)
+    logger.info(f"Fetched artists data: length len(artists_data)={len(artists_data)}")
+    return artists_data
