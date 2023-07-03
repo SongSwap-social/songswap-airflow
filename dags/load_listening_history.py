@@ -204,7 +204,7 @@ def transform_history(history: dict) -> dict:
 
     Returns:
         dict: The transformed listening history for all users whose history is not empty
-            :: {"user_id": {"Artists": [], "Tracks": [], "ArtistTracks": [], "TrackPopularity": [], "History": []}, ...}
+            :: {"Artists": [], "Tracks": [], "ArtistTracks": [], "TrackPopularity": [], "History": [], ...}
     """
     from src.utils.history_utils import transform_data
 
