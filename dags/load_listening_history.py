@@ -2,8 +2,9 @@
 
 import logging
 from datetime import datetime, timedelta
-from json import dumps, loads
+from json import dumps
 from traceback import format_exc
+from typing import List
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
@@ -82,11 +83,11 @@ def _timestamp_to_string(after_timestamp: int) -> str:
 
     Args:
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
-        ::  1627776000000
+            ::  1627776000000
 
     Returns:
         str: String in the format %Y-%m-%d_%H
-        ::  2021-08-01_00
+            ::  2021-08-01_00
     """
     string_timestamp = datetime.fromtimestamp(int(after_timestamp / 1000)).strftime(
         "%Y-%m-%d_%H"
@@ -95,7 +96,7 @@ def _timestamp_to_string(after_timestamp: int) -> str:
     return string_timestamp
 
 
-def extract_spotify_history(after_timestamp: int = None) -> dict:
+def extract_history(after_timestamp: int = None) -> dict:
     """Extracts listening history from Spotify for all users
 
     Returns a dict of the listening history for all users whose history is not empty.
@@ -145,7 +146,7 @@ def extract_spotify_history(after_timestamp: int = None) -> dict:
     return history
 
 
-def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
+def load_history_to_s3(history: dict, after_timestamp: int = None):
     """Loads listening history from Spotify to S3 for all users whose history is not empty
 
     If the listening history for a user already exists in S3, it will not be overwritten.
@@ -154,9 +155,8 @@ def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
         e.g. botocore.exceptions.ClientError: An error occurred (403) when calling the HeadObject operation: Forbidden
             This error occurs due to malformed headers, which is caused by a network error
     Args:
-        history (dict): JSON string of the listening history for a single user, as returned by `extract_spotify_history`
+        history (dict): JSON string of the listening history for a single user, as returned by `extract_history`
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
-        context (dict): Context passed by Airfow
     """
     from airflow.models import Variable
     from airflow.providers.amazon.aws.hooks.s3 import S3Hook
@@ -196,35 +196,63 @@ def load_spotify_history_to_s3(history: dict, after_timestamp: int = None):
             save_json_file(json_data=user_history, file_path=TMP_DIR + user_object_name)
 
 
-def load_spotify_history_to_rds(history: dict, after_timestamp: int = None):
+def transform_history(history: dict) -> dict:
+    """Transforms the listening history for all users whose history is not empty
+
+    Args:
+        history (dict): JSON string of the listening history for a single user, as returned by `extract_history`
+
+    Returns:
+        dict: The transformed listening history for all users whose history is not empty
+            :: {"user_id": {"Artists": [], "Tracks": [], "ArtistTracks": [], "TrackPopularity": [], "History": []}, ...}
+    """
+    from src.utils.history_utils import transform_data
+
+    def _flatten_transformed_histories(transformed_histories: List[dict]) -> dict:
+        """Flattens a list of transformed histories into a single dict."""
+        data = {
+            "Artists": [],
+            "Tracks": [],
+            "ArtistTracks": [],
+            "TrackPopularity": [],
+            "History": [],
+            "TrackImages": [],
+            "TrackPreviews": [],
+        }
+        for transformed_history in transformed_histories:
+            for table in data:
+                data[table].extend(transformed_history[table])
+        return data
+
+    logger.info("Transforming Spotify listening history")
+    logger.debug(f"history={history}")
+
+    transformed_histories = []
+    for user_id in history:
+        user_history = history[user_id]
+        transformed_history = transform_data(raw_data=user_history, user_id=user_id)
+        transformed_histories.append(transformed_history)
+
+    return _flatten_transformed_histories(transformed_histories)
+
+
+def load_history_to_rds(transformed_histories: dict, after_timestamp: int = None):
     """Loads transformed listening history from Spotify of all users to RDS
     Args:
-        history (dict): JSON string of the listening history for a single user, as returned by `extract_spotify_history`
+        transformed_histories (dict): The transformed listening history for all users whose history is not empty as returned by `transform_history`
         after_timestamp (int): Unix timestamp in milliseconds of the hour we want to fetch the listening history for.
     """
     from airflow.providers.postgres.hooks.postgres import PostgresHook
-    from src.utils.history_utils import transform_data
-    from src.utils.rds_utils import insert_history_bulk
+    from src.utils.history_utils import insert_history_bulk
 
     timestamp = _timestamp_to_string(after_timestamp)
     logger.info(
         f"Loading Spotify listening to RDS history for after_timestamp={after_timestamp}, timestamp={timestamp}"
     )
-
-    logger.debug(f"history={history}")
-
-    # Transform history to a format that can be inserted into RDS
-    transformed_histories = []
-    for user_id in history:
-        user_history = history[user_id]
-        transformed_histories.append(
-            loads(transform_data(raw_data=user_history, user_id=user_id))
-        )
-
-    pg_hook = PostgresHook(postgres_conn_id="SongSwap_RDS")
-
+    logger.debug(f"transformed_histories={transformed_histories}")
     # Insert history into RDS
-    insert_history_bulk(data_list=transformed_histories, pg_hook=pg_hook)
+    pg_hook = PostgresHook(postgres_conn_id="SongSwap_RDS")
+    insert_history_bulk(transformed_data=transformed_histories, pg_hook=pg_hook)
 
 
 def load_local_files_to_s3():
@@ -262,6 +290,65 @@ def load_local_files_to_s3():
             logger.error(format_exc())
 
 
+def extract_artist_data_from_history(history: dict) -> List[dict]:
+    """Extracts artist data from the listening history of all users
+
+    Args:
+        history (dict): The listening history for all users whose history is not empty as returned by `extract_history`
+
+    Returns:
+        List[dict]: A list of artist data for all artists in the listening history of all users
+    """
+    from src.utils.artist_utils import (
+        fetch_artists_data_with_dates,
+        get_artists_and_dates_from_history,
+        validate_assumption,
+    )
+
+    artists_and_dates = []
+    for user_history in history.values():
+        artists_and_dates.extend(get_artists_and_dates_from_history(user_history))
+
+    artists_data = fetch_artists_data_with_dates(artists_and_dates)
+    logger.info(f"Extracted {len(artists_data)} artists from Spotify listening history")
+    validate_assumption(artists_data, artists_and_dates)
+    return artists_data
+
+
+def transform_artist_data(artists_data: List[dict]) -> dict:
+    """Transforms artist data from Spotify into a format that can be loaded to RDS
+
+    Args:
+        artists_data (List[dict]): A list of artist data for all artists in the listening history of all users
+            :: from `fetch_artists_data_with_dates`
+
+    Returns:
+        dict: A dict of transformed artist data for all artists in the listening history of all users
+    """
+    from src.utils.artist_utils import transform_data
+
+    transformed_data = transform_data(artists_data)
+    logger.info(f"Transformed {len(transformed_data)} artists from Spotify")
+    return transformed_data
+
+
+def load_artist_data_to_rds(transformed_data: dict):
+    """Fetches metadata about artists in users' histories from Spotify and loads it to RDS
+
+    Args:
+        transformed_data (dict): A dict of transformed artist data for all artists in the listening history of all users
+            :: from `transform_artist_data`
+
+    Returns:
+        dict: A dict of transformed artist data for all artists in the listening history of all users
+    """
+    from src.utils.artist_utils import insert_artist_bulk
+
+    logger.info(f"Loading {len(transformed_data)} artists to RDS")
+    pg_hook = PostgresHook(postgres_conn_id="SongSwap_RDS")
+    insert_artist_bulk(transformed_data, pg_hook)
+
+
 with DAG(
     dag_id="load_history",
     description="DAG to load listening histories from Spotify to S3 and RDS PostgreSQL",
@@ -278,44 +365,80 @@ with DAG(
 
     # Extract and load listening history for all users
     # Short circuit if there's no history to load, skip the load task
-    extract_spotify_history_task = ShortCircuitOperator(
-        task_id="extract_spotify_history",
-        python_callable=extract_spotify_history,
+    extract_history_task = ShortCircuitOperator(
+        task_id="extract_history",
+        python_callable=extract_history,
         op_kwargs={"after_timestamp": calculate_timestamp_task.output},
         on_failure_callback=discord_notification_on_failure,
         retries=1,
     )
 
-    load_spotify_history_to_s3_task = PythonOperator(
-        task_id="load_spotify_history_to_s3",
-        python_callable=load_spotify_history_to_s3,
+    load_history_to_s3_task = PythonOperator(
+        task_id="load_history_to_s3",
+        python_callable=load_history_to_s3,
         op_kwargs={
-            "history": extract_spotify_history_task.output,
+            "history": extract_history_task.output,
             "after_timestamp": calculate_timestamp_task.output,
         },
         on_failure_callback=discord_notification_on_failure,
     )
-
-    load_spotify_history_to_rds_task = PythonOperator(
-        task_id="load_spotify_history_to_rds",
-        python_callable=load_spotify_history_to_rds,
-        op_kwargs={
-            "history": extract_spotify_history_task.output,
-            "after_timestamp": calculate_timestamp_task.output,
-        },
-        on_failure_callback=discord_notification_on_failure,
-    )
-
     load_local_files_to_s3_task = PythonOperator(
         task_id="load_local_files_to_s3",
         python_callable=load_local_files_to_s3,
         on_failure_callback=discord_notification_on_failure,
     )
 
-    (
-        extract_spotify_history_task
-        >> load_spotify_history_to_s3_task
-        >> load_local_files_to_s3_task
+    (extract_history_task >> load_history_to_s3_task >> load_local_files_to_s3_task)
+
+    transform_history_task = PythonOperator(
+        task_id="transform_history",
+        python_callable=transform_history,
+        op_kwargs={"history": extract_history_task.output},
+        on_failure_callback=discord_notification_on_failure,
     )
 
-    (extract_spotify_history_task >> load_spotify_history_to_rds_task)
+    load_history_to_rds_task = PythonOperator(
+        task_id="load_history_to_rds",
+        python_callable=load_history_to_rds,
+        op_kwargs={
+            "transformed_histories": transform_history_task.output,
+            "after_timestamp": calculate_timestamp_task.output,
+        },
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    extract_artist_data_from_history_task = PythonOperator(
+        task_id="extract_artist_data_from_history",
+        python_callable=extract_artist_data_from_history,
+        op_kwargs={"history": extract_history_task.output},
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    transform_artist_data_task = PythonOperator(
+        task_id="transform_artist_data",
+        python_callable=transform_artist_data,
+        op_kwargs={
+            "artists_data": extract_artist_data_from_history_task.output,
+        },
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    load_artist_data_to_rds_task = PythonOperator(
+        task_id="load_artist_data_to_rds",
+        python_callable=load_artist_data_to_rds,
+        op_kwargs={
+            "transformed_data": transform_artist_data_task.output,
+        },
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    (
+        extract_history_task
+        >> transform_history_task
+        >> load_history_to_rds_task
+        >> (
+            extract_artist_data_from_history_task
+            >> transform_artist_data_task
+            >> load_artist_data_to_rds_task
+        )
+    )

@@ -1,11 +1,15 @@
 """Utility functions for transforming and loading listening history data to RDS."""
 import logging
-from json import dumps, loads
+from json import loads
 from typing import List, Set, Tuple, Union
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from dateutil.parser import parse
-from src.utils.rds_utils import fetch_query_results_in_chunks, get_database_cursor
+from src.utils.rds_utils import (
+    fetch_query_results_in_chunks,
+    get_database_cursor,
+    insert_bulk,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +46,7 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
             continue
 
         artists = track.get("artists")
-        album = track.get("album")
+        album: dict = track.get("album")
         images = album.get("images")
         track_id: str = track.get("id")
         track_name: str = track.get("name")
@@ -117,8 +121,7 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
             }
         )
 
-    # return data as JSON string
-    return dumps(data)
+    return data
 
 
 def verify_transformed_data_keys(data: dict):
@@ -230,21 +233,6 @@ def verify_transformed_data_values(data: dict):
                 ), f"Table {table_name}, Row {row} contains null values at field: {field}"
 
 
-def generate_bulk_insert_query(table: str, data: List[dict]) -> str:
-    """Generate a SQL query for inserting many rows into a table.
-
-    Args:
-        table (str): The name of the table to insert into.
-        data (List[dict]): The data to be inserted. It should be a list of dictionaries.
-
-    Returns:
-        str: SQL query string.
-    """
-    columns = data[0].keys()
-    query = f"INSERT INTO \"{table}\" ({', '.join(columns)}) VALUES %s ON CONFLICT DO NOTHING"
-    return query
-
-
 def parse_data(data: Union[dict, str]) -> dict:
     """Parse data from JSON string to dictionary.
 
@@ -261,8 +249,24 @@ def parse_data(data: Union[dict, str]) -> dict:
     return data
 
 
-def prepare_history_data_for_comparison(data: dict) -> Set[Tuple]:
-    """Prepare history data for comparison.
+def insert_history_bulk(transformed_data: dict, pg_hook: PostgresHook):
+    """Insert history for multiple users into the database
+
+    Args:
+        transformed_data (dict): The transformed data to be inserted. `data` should be
+            dictionary with keys: "Artists", "Tracks", "ArtistsTracks", "TrackImages", "History", etc.
+        pg_hook (PostgresHook): Hook to connect to the database.
+    """
+    transformed_data = parse_data(transformed_data)
+    insert_bulk(transformed_data, pg_hook)
+
+
+def _prepare_history_data_for_comparison(data: dict) -> Set[Tuple]:
+    """Prepare history data for comparison - `data` should be a dictionary with keys
+    "Artists", "Tracks", "ArtistsTracks", "TrackImages", "History", etc., each of which
+    should map to a list of dictionaries.
+
+    `data` is from the `transform_data` function above.
 
     Args:
         data (dict): The data to be prepared.
@@ -282,7 +286,7 @@ def prepare_history_data_for_comparison(data: dict) -> Set[Tuple]:
     return history_data
 
 
-def construct_where_clause(data: dict) -> str:
+def _construct_where_clause(data: dict) -> str:
     """Construct a WHERE clause for the select query.
 
     Args:
@@ -293,13 +297,14 @@ def construct_where_clause(data: dict) -> str:
         str: The WHERE clause.
             e.g. :: "user_id IN (1, 2) AND played_at IN ('2021-01-01 00:00:00', '2021-01-02 00:00:00')"
     """
+    # ? Convert each value to a string and join them with commas ? Not sure if mapping is necessary
     user_ids = ", ".join(map(str, set(item["user_id"] for item in data["History"])))
     played_at_values = ", ".join(f"'{item['played_at']}'" for item in data["History"])
     where_in_data = f"user_id IN ({user_ids}) AND played_at IN ({played_at_values})"
     return where_in_data
 
 
-def construct_select_query(table: str, where_clause: str) -> str:
+def _construct_select_query(table: str, where_clause: str) -> str:
     """Construct a SELECT query.
 
     Args:
@@ -319,7 +324,7 @@ def construct_select_query(table: str, where_clause: str) -> str:
     return query
 
 
-def assert_matching_data(data1: Set[Tuple], data2: Set[Tuple]):
+def _assert_matching_data(data1: Set[Tuple], data2: Set[Tuple]):
     """Assert that the transformed data and queried data match."""
     assert data1 == data2, (
         "Transformed data and queried data do not match: " f"{data1} != {data2}"
@@ -332,13 +337,13 @@ def verify_inserted_history(transformed_data: dict, pg_hook: PostgresHook):
     transformed_data = parse_data(transformed_data)
     conn, cursor = get_database_cursor(pg_hook)
 
-    history_data = prepare_history_data_for_comparison(transformed_data)
-    where_clause = construct_where_clause(transformed_data)
-    query = construct_select_query("History", where_clause)
+    history_data = _prepare_history_data_for_comparison(transformed_data)
+    where_clause = _construct_where_clause(transformed_data)
+    query = _construct_select_query("History", where_clause)
 
     try:
         queried_history = fetch_query_results_in_chunks(cursor, query)
-        assert_matching_data(history_data, queried_history)
+        _assert_matching_data(history_data, queried_history)
 
     except Exception as e:
         logger.error(f"Failed to query data: {str(e)}")

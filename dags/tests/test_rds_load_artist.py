@@ -6,14 +6,15 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from src.utils.discord_utils import discord_notification_on_failure
-from src.utils.history_utils import (
+from src.utils.artist_utils import (
+    fetch_artists_data_with_dates,
+    get_artists_and_dates_from_history,
+    insert_artist_bulk,
     transform_data,
-    verify_inserted_history,
     verify_transformed_data_keys,
     verify_transformed_data_values,
-    insert_history_bulk,
 )
+from src.utils.discord_utils import discord_notification_on_failure
 
 logger = logging.getLogger(__name__)
 default_args = {
@@ -51,7 +52,7 @@ def verify_test_user_exists(postgres_hook: PostgresHook):
     # Create a cursor
     cursor = conn.cursor()
     # Execute a query
-    cursor.execute('SELECT * FROM "Users" WHERE id=0;')
+    cursor.execute(f'SELECT * FROM "Users" WHERE id={TEST_USER_ID};')
     # Fetch the result
     result = cursor.fetchone()
     # Verify the result: id, username, email, spotify_id
@@ -63,9 +64,9 @@ def verify_test_user_exists(postgres_hook: PostgresHook):
     )
 
 
-def test_transform_data(json_data: str, user_id: int) -> dict:
+def test_transform_data(raw_artists_data: str) -> dict:
     """Test that the data is transformed correctly."""
-    transformed_data = transform_data(json_data, user_id)
+    transformed_data = transform_data(raw_artists_data)
     logger.info(f"transformed_data: {transformed_data}")
     return transformed_data
 
@@ -88,9 +89,9 @@ def validate_transform_data_value_format(transformed_data: dict):
     verify_transformed_data_values(transformed_data)
 
 
-def test_insert_history(transformed_data: dict, postgres_hook: PostgresHook):
+def test_insert_artist_data(transformed_data: dict, postgres_hook: PostgresHook):
     """Test that the data is inserted into the database correctly."""
-    insert_history_bulk(transformed_data, postgres_hook)
+    insert_artist_bulk(transformed_data, postgres_hook)
 
 
 def verify_data_inserted_correctly(transformed_data: dict, postgres_hook: PostgresHook):
@@ -99,7 +100,8 @@ def verify_data_inserted_correctly(transformed_data: dict, postgres_hook: Postgr
     Check the history table for the user, and verify that the data matches the
     data that was inserted.
     """
-    verify_inserted_history(transformed_data, postgres_hook)
+    # verify_inserted_artist(transformed_data, postgres_hook)
+    pass
 
 
 def cleanup_test_data(postgres_hook: PostgresHook, user_id: int):
@@ -150,13 +152,13 @@ def cleanup_test_data(postgres_hook: PostgresHook, user_id: int):
 
 
 with DAG(
-    "test_rds_load_history",
+    "test_rds_load_artist",
     default_args=default_args,
     schedule_interval=None,
     tags=["songswap", "test", "unit"],
     catchup=False,
     on_failure_callback=discord_notification_on_failure,
-    description="Test that the listening history is transformed and loaded into the database correctly. \
+    description="Test that the artist data is fetched, transformed, and loaded into the database correctly. \
         NOTE: This DAG is not meant to be run on a schedule. \
         This DAG only removes the History, not the Track, Artist, TrackImages, etc.",
 ) as dag:
@@ -171,10 +173,22 @@ with DAG(
         op_kwargs={"postgres_hook": postgres_hook},
     )
 
+    t_get_artists_and_dates_from_history = PythonOperator(
+        task_id="get_artists_and_dates_from_history",
+        python_callable=get_artists_and_dates_from_history,
+        op_kwargs={"history": json_data},
+    )
+
+    t_fetch_artists_data = PythonOperator(
+        task_id="fetch_artists_data",
+        python_callable=fetch_artists_data_with_dates,
+        op_kwargs={"artists_and_dates": t_get_artists_and_dates_from_history.output},
+    )
+
     t_test_transform_data = PythonOperator(
         task_id="test_transform_data",
         python_callable=test_transform_data,
-        op_kwargs={"json_data": json_data, "user_id": TEST_USER_ID},
+        op_kwargs={"raw_artists_data": t_fetch_artists_data.output},
     )
 
     # Validate the keys in the transformed data
@@ -192,51 +206,53 @@ with DAG(
     )
 
     # Insert the data into the database
-    t_test_insert_history = PythonOperator(
-        task_id="test_insert_history",
-        python_callable=test_insert_history,
+    t_test_insert_artist_data = PythonOperator(
+        task_id="test_insert_artist_data",
+        python_callable=test_insert_artist_data,
         op_kwargs={
             "transformed_data": t_test_transform_data.output,
             "postgres_hook": postgres_hook,
         },
     )
 
-    # Verify data was inserted correctly
-    t_validate_inserted_history = PythonOperator(
-        task_id="validate_inserted_history",
-        python_callable=verify_data_inserted_correctly,
+    # # Verify data was inserted correctly
+    # t_validate_inserted_artist_data = PythonOperator(
+    #     task_id="validate_inserted_artist_data",
+    #     python_callable=verify_data_inserted_correctly,
+    #     op_kwargs={
+    #         "transformed_data": t_test_transform_data.output,
+    #         "postgres_hook": postgres_hook,
+    #     },
+    # )
+
+    # # Try inserting again, verify no errors
+    t_test_insert_artist_data_again = PythonOperator(
+        task_id="test_insert_artist_data_again",
+        python_callable=test_insert_artist_data,
         op_kwargs={
             "transformed_data": t_test_transform_data.output,
             "postgres_hook": postgres_hook,
         },
     )
 
-    # Try inserting again, verify no errors
-    t_test_insert_history_again = PythonOperator(
-        task_id="test_insert_history_again",
-        python_callable=test_insert_history,
-        op_kwargs={
-            "transformed_data": t_test_transform_data.output,
-            "postgres_hook": postgres_hook,
-        },
-    )
-
-    # Delete the data that was inserted
-    t_cleanup_test_data = PythonOperator(
-        task_id="cleanup_test_data",
-        python_callable=cleanup_test_data,
-        op_kwargs={"postgres_hook": postgres_hook, "user_id": TEST_USER_ID},
-    )
+    # # Delete the data that was inserted
+    # t_cleanup_test_data = PythonOperator(
+    #     task_id="cleanup_test_data",
+    #     python_callable=cleanup_test_data,
+    #     op_kwargs={"postgres_hook": postgres_hook, "user_id": TEST_USER_ID},
+    # )
 
     (
         t_verify_test_user_exists
+        >> t_get_artists_and_dates_from_history
+        >> t_fetch_artists_data
         >> t_test_transform_data
         >> [
             t_validate_transform_data_key_format,
             t_validate_transform_data_value_format,
         ]
-        >> t_test_insert_history
-        >> t_validate_inserted_history
-        >> t_test_insert_history_again
-        >> t_cleanup_test_data
+        >> t_test_insert_artist_data
+        # # >> t_validate_inserted_history
+        >> t_test_insert_artist_data_again
+        # >> t_cleanup_test_data
     )
