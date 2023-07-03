@@ -1,6 +1,6 @@
 """Utility functions for transforming and loading listening history data to RDS."""
 import logging
-from json import dumps, loads
+from json import loads
 from typing import List, Set, Tuple, Union
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook

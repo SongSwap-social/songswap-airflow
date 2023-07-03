@@ -17,6 +17,9 @@ def generate_bulk_insert_query(table: str, data: List[dict]) -> str:
     Returns:
         str: SQL query string.
     """
+    logger.info(f"Generating bulk insert query: table={table}, rows={len(data)}")
+    logger.debug(f"Table: {table}, Columns: {data[0].keys()}, Rows: {len(data)}")
+    logger.debug(f"Data: {data}")
     columns = data[0].keys()
     query = f"INSERT INTO \"{table}\" ({', '.join(columns)}) VALUES %s ON CONFLICT DO NOTHING"
     return query
