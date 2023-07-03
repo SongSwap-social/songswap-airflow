@@ -3,7 +3,7 @@ import logging
 from typing import List
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from src.utils.rds_utils import get_database_cursor, insert_bulk
+from src.utils.rds_utils import insert_bulk
 from src.utils.spotify_utils import fetch_artists_data
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def transform_data(raw_data: List[dict]) -> dict:
     return data
 
 
-def get_artists_and_dates_from_history(history: List[dict]) -> dict:
+def get_artists_and_dates_from_history(history: List[dict]) -> List[tuple]:
     """
     Extracts artists and dates from listening history data.
 
@@ -71,34 +71,84 @@ def get_artists_and_dates_from_history(history: List[dict]) -> dict:
         history (list): List of raw listening history data.
 
     Returns:
-        dict: Dictionary containing artist IDs mapped to their played_at dates.
+        List[tuple]: List of tuples containing artist id and date.
     """
-    artists_and_dates = {
-        artist["id"]: item["played_at"]
+    logger.info(f"Extracting artists and dates from {len(history)} history items.")
+    logger.info(f"HISTORY: {history}")
+    artists_and_dates = [
+        (artist["id"], item["played_at"])
         for item in history["items"]
         for artist in item["track"]["artists"]
-    }
+    ]
     return artists_and_dates
 
 
-def fetch_artists_data_with_dates(artists_and_dates: List[dict]) -> List[dict]:
+def fetch_artists_data_with_dates(artists_and_dates: List[tuple]) -> List[dict]:
     """
-    Fetches artist data from Spotify API for a list of artists and dates.
+    Fetches artist data from Spotify API and adds `played_at` dates to each artist.
 
     Args:
-        artists_and_dates (list): List of dictionaries containing artist and date information.
+        artists_and_dates (list): List of tuples containing artist id and date.
+            :: from `get_artists_and_dates_from_history` function.
 
     Returns:
-        list: List of dictionaries containing raw artist data from Spotify API.
+        List[dict]: List of artist data dictionaries.
+
     """
     logger.info(f"Fetching artists data for {len(artists_and_dates)} artists.")
-    artists = artists_and_dates.keys()
-    artists_data: List[dict] = fetch_artists_data(artists)["artists"]
 
-    logger.info(f"Adding `played_at` dates to artists data.")
-    for artist in artists_data:
-        artist["date"] = artists_and_dates[artist["id"]]
+    # Chunk artist_and_dates into groups of 50
+    chunk_size = 50
+    artists_and_dates_chunks = [
+        artists_and_dates[i : i + chunk_size]
+        for i in range(0, len(artists_and_dates), chunk_size)
+    ]
+
+    artists_data = []
+    # Fetch artist data for each chunk
+    for i, chunk in enumerate(artists_and_dates_chunks):
+        logger.info(f"Fetching chunk {i+1}/{len(artists_and_dates_chunks)}")
+        artists = fetch_artists_data([artist_id for artist_id, _ in chunk])["artists"]
+        # Add played_date to each artist
+        # ASSUMPTION: The order of artists returned from the API is the same as the order of artist ids passed in.
+        for artist, (_, played_at) in zip(artists, chunk):
+            artist["date"] = played_at
+        artists_data.extend(artists)
+
     return artists_data
+
+
+def validate_assumption(artists_data: List[dict], artists_and_dates: List[tuple]):
+    """
+    Validates the assumption that the order of artists returned from the API is the same as the order of artist ids
+    passed in.
+
+    Verifies that the order of artist ids in `artists_data` is the same as the order of artist ids in
+    `artists_and_dates`. Also verifies that the dates are the same.
+
+    Args:
+        artists_data (list): List of artist data dictionaries.
+        artists_and_dates (list): List of tuples containing artist id and date.
+            :: from `get_artists_and_dates_from_history` function.
+
+    Raises:
+        ValueError: If the order of artists returned from the API is not the same as the order of artist ids passed in.
+    """
+
+    logger.info(
+        "Validating assumption that the order of artists returned from the API is the same as the order of "
+        "artist ids passed in."
+    )
+    # Get artist ids and dates from artists_data
+    artists_data_ids_and_dates = [
+        (artist["id"], artist["date"]) for artist in artists_data
+    ]
+
+    # Check that the order of artist ids is the same
+    if artists_data_ids_and_dates != artists_and_dates:
+        raise ValueError(
+            "The order of artists returned from the API is not the same as the order of artist ids passed in."
+        )
 
 
 def insert_artist_bulk(transformed_data: dict, pg_hook: PostgresHook):
