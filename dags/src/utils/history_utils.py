@@ -46,7 +46,7 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
             continue
 
         artists = track.get("artists")
-        album = track.get("album")
+        album: dict = track.get("album")
         images = album.get("images")
         track_id: str = track.get("id")
         track_name: str = track.get("name")

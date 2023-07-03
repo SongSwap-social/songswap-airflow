@@ -52,7 +52,7 @@ def verify_test_user_exists(postgres_hook: PostgresHook):
     # Create a cursor
     cursor = conn.cursor()
     # Execute a query
-    cursor.execute('SELECT * FROM "Users" WHERE id=0;')
+    cursor.execute(f'SELECT * FROM "Users" WHERE id={TEST_USER_ID};')
     # Fetch the result
     result = cursor.fetchone()
     # Verify the result: id, username, email, spotify_id
