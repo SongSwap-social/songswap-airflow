@@ -14,6 +14,22 @@ from src.utils.spotify_utils import fetch_tracks_features
 logger = logging.getLogger(__name__)
 
 
+def get_track_ids_from_history(history: dict) -> List[str]:
+    """Get a list of track IDs from a listening history.
+
+    Args:
+        history (dict): A listening history.
+
+    Returns:
+        List[str]: A list of track IDs.
+    """
+    logger.info(f"Extracting track IDs from listening history.")
+    track_ids = []
+    for item in history["items"]:
+        track_ids.append(item["track"]["id"])
+    return track_ids
+
+
 def fetch_track_features_data(track_ids: List[str]) -> List[dict]:
     """Fetch track features data from the Spotify API.
 

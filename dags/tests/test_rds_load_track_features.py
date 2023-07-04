@@ -10,6 +10,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from src.utils.discord_utils import discord_notification_on_failure
 from src.utils.track_utils import (
     fetch_track_features_data,
+    get_track_ids_from_history,
     insert_track_features_bulk,
     transform_data,
     verify_inserted_track_features,
@@ -63,18 +64,6 @@ def verify_test_user_exists(postgres_hook: PostgresHook):
         TEST_USER_EMAIL,
         TEST_USER_SPOTIFY_ID,
     )
-
-
-def get_track_ids_from_history(history: dict) -> List[str]:
-    """Get the track IDs from the listening history data.
-
-    Args:
-        history (dict): The listening history data.
-
-    Returns:
-        list: A list of track IDs.
-    """
-    return [item["track"]["id"] for item in history["items"]]
 
 
 def test_transform_data(raw_tracks_data: str) -> dict:
