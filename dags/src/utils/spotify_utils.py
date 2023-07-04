@@ -223,3 +223,58 @@ def fetch_artists_data(artist_ids: List[str]) -> dict:
 
     logger.info(f"Fetched artists data: length len(artists_data)={len(artists_data)}")
     return artists_data
+
+
+def fetch_tracks_features(track_ids: List[str]) -> List[dict]:
+    """Fetches track features from Spotify for a list of track IDs.
+
+    Args:
+        track_ids (list): List of track IDs to fetch features for.
+
+    Returns:
+        list: The track features for the provided track IDs
+
+    Raises:
+        ValueError: If more than 100 track IDs are provided
+
+    Assumption:
+        - The results are returned in the same order as the track IDs provided.
+        - The track IDs provided are valid. The API does not return an error if an invalid ID is provided.
+
+    Example response ::
+        [
+            {
+                "acousticness": 0.00242,
+                "analysis_url": "https://api.spotify.com/v1/audio-analysis/2takcwOaAZWiXQijPHIx7B",
+                "danceability": 0.585,
+                "duration_ms": 237040,
+                "energy": 0.842,
+                "id": "2takcwOaAZWiXQijPHIx7B",
+                "instrumentalness": 0.00686,
+                "key": 9,
+                "liveness": 0.0866,
+                "loudness": -5.883,
+                "mode": 0,
+                "speechiness": 0.0556,
+                "tempo": 118.211,
+                "time_signature": 4,
+                "track_href": "https://api.spotify.com/v1/tracks/2takcwOaAZWiXQijPHIx7B",
+                "type": "audio_features",
+                "uri": "spotify:track:2takcwOaAZWiXQijPHIx7B",
+                "valence": 0.428
+            }
+        ]
+    """
+
+    sp = spotipy.Spotify(oauth_manager=SPOTIFY_AUTH_MGR)
+    # Verify there are no more than 100 track IDs
+    if len(track_ids) > 100:
+        raise ValueError("Can only fetch data for up to 100 tracks at a time")
+
+    # Fetch the track features
+    track_features = sp.audio_features(track_ids)
+
+    logger.info(
+        f"Fetched track features: length len(track_features)={len(track_features)}"
+    )
+    return track_features

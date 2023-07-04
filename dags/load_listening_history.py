@@ -204,7 +204,7 @@ def transform_history(history: dict) -> dict:
 
     Returns:
         dict: The transformed listening history for all users whose history is not empty
-            :: {"user_id": {"Artists": [], "Tracks": [], "ArtistTracks": [], "TrackPopularity": [], "History": []}, ...}
+            :: {"Artists": [], "Tracks": [], "ArtistTracks": [], "TrackPopularity": [], "History": [], ...}
     """
     from src.utils.history_utils import transform_data
 
@@ -349,6 +349,70 @@ def load_artist_data_to_rds(transformed_data: dict):
     insert_artist_bulk(transformed_data, pg_hook)
 
 
+def extract_track_features_from_history(history: dict) -> List[dict]:
+    """Extracts track features from the listening history of all users
+
+    Args:
+        history (dict): The listening history for all users whose history is not empty as returned by `extract_history`
+
+    Returns:
+        List[dict]: A list of track features for all tracks in the listening history of all users
+    """
+    from src.utils.track_utils import (
+        fetch_track_features_data,
+        get_track_ids_from_history,
+    )
+
+    track_ids = []
+    # Extract track ids from history
+    for user_history in history.values():
+        track_ids.extend(get_track_ids_from_history(user_history))
+
+    # Remove duplicates
+    track_ids = list(set(track_ids))
+
+    # Fetch track features from Spotify
+    tracks_features = fetch_track_features_data(track_ids)
+    logger.info(
+        f"Extracted {len(tracks_features)} tracks from Spotify listening history"
+    )
+    return tracks_features
+
+
+def transform_track_features_data(tracks_features: List[dict]) -> dict:
+    """Transforms track features data from Spotify into a format that can be loaded to RDS
+
+    Args:
+        tracks_features (List[dict]): A list of track features for all tracks in the listening history of all users
+            :: from `fetch_track_features_data`
+
+    Returns:
+        dict: A dict of transformed track features data for all tracks in the listening history of all users
+    """
+    from src.utils.track_utils import transform_data
+
+    transformed_data = transform_data(tracks_features)
+    logger.info(f"Transformed {len(transformed_data)} tracks from Spotify")
+    return transformed_data
+
+
+def load_track_features_data_to_rds(transformed_data: dict):
+    """Fetches metadata about tracks in users' histories from Spotify and loads it to RDS
+
+    Args:
+        transformed_data (dict): A dict of transformed track features data for all tracks in the listening history of all users
+            :: from `transform_track_features_data`
+
+    Returns:
+        dict: A dict of transformed track features data for all tracks in the listening history of all users
+    """
+    from src.utils.track_utils import insert_track_features_bulk
+
+    logger.info(f"Loading {len(transformed_data)} track features to RDS")
+    pg_hook = PostgresHook(postgres_conn_id="SongSwap_RDS")
+    insert_track_features_bulk(transformed_data, pg_hook)
+
+
 with DAG(
     dag_id="load_history",
     description="DAG to load listening histories from Spotify to S3 and RDS PostgreSQL",
@@ -432,13 +496,44 @@ with DAG(
         on_failure_callback=discord_notification_on_failure,
     )
 
+    extract_track_features_from_history_task = PythonOperator(
+        task_id="extract_track_features_from_history",
+        python_callable=extract_track_features_from_history,
+        op_kwargs={"history": extract_history_task.output},
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    transform_track_features_task = PythonOperator(
+        task_id="transform_track_features",
+        python_callable=transform_track_features_data,
+        op_kwargs={
+            "tracks_features": extract_track_features_from_history_task.output,
+        },
+        on_failure_callback=discord_notification_on_failure,
+    )
+
+    load_track_features_to_rds_task = PythonOperator(
+        task_id="load_track_features_to_rds",
+        python_callable=load_track_features_data_to_rds,
+        op_kwargs={
+            "transformed_data": transform_track_features_task.output,
+        },
+        on_failure_callback=discord_notification_on_failure,
+    )
+
     (
         extract_history_task
         >> transform_history_task
         >> load_history_to_rds_task
+        # Load artist data and track features in parallel
         >> (
             extract_artist_data_from_history_task
             >> transform_artist_data_task
             >> load_artist_data_to_rds_task
+        )
+        >> (
+            extract_track_features_from_history_task
+            >> transform_track_features_task
+            >> load_track_features_to_rds_task
         )
     )
