@@ -7,13 +7,6 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from src.utils.discord_utils import discord_notification_on_failure
-from src.utils.history_utils import (
-    transform_data,
-    verify_inserted_history,
-    verify_transformed_data_keys,
-    verify_transformed_data_values,
-    insert_history_bulk,
-)
 
 logger = logging.getLogger(__name__)
 default_args = {
@@ -65,9 +58,11 @@ def verify_test_user_exists(postgres_hook: PostgresHook):
 
 def test_transform_data(json_data: str, user_id: int) -> dict:
     """Test that the data is transformed correctly."""
-    transformed_data = transform_data(json_data, user_id)
-    logger.info(f"transformed_data: {transformed_data}")
-    return transformed_data
+    from src.utils.history_utils import transform_history_data
+
+    transformed_history_data = transform_history_data(json_data, user_id)
+    logger.info(f"transformed_history_data: {transformed_history_data}")
+    return transformed_history_data
 
 
 def validate_transform_data_key_format(transformed_data: dict):
@@ -76,7 +71,9 @@ def validate_transform_data_key_format(transformed_data: dict):
     The keys should be the names of the tables in the database, and the values
     should be lists of dictionaries, where each dictionary is a row in the table.
     """
-    verify_transformed_data_keys(transformed_data)
+    from src.utils.history_utils import validate_transformed_history_data_keys
+
+    validate_transformed_history_data_keys(transformed_data)
 
 
 def validate_transform_data_value_format(transformed_data: dict):
@@ -85,11 +82,15 @@ def validate_transform_data_value_format(transformed_data: dict):
     The values must be lists of dictionaries, where each dictionary is a row in
     the table. The values must not be empty.
     """
-    verify_transformed_data_values(transformed_data)
+    from src.utils.history_utils import validate_transformed_history_data_values
+
+    validate_transformed_history_data_values(transformed_data)
 
 
 def test_insert_history(transformed_data: dict, postgres_hook: PostgresHook):
     """Test that the data is inserted into the database correctly."""
+    from src.utils.history_utils import insert_history_bulk
+
     insert_history_bulk(transformed_data, postgres_hook)
 
 
@@ -99,6 +100,8 @@ def verify_data_inserted_correctly(transformed_data: dict, postgres_hook: Postgr
     Check the history table for the user, and verify that the data matches the
     data that was inserted.
     """
+    from src.utils.history_utils import verify_inserted_history
+
     verify_inserted_history(transformed_data, postgres_hook)
 
 

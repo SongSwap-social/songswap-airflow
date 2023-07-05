@@ -14,7 +14,7 @@ from src.utils.rds_utils import (
 logger = logging.getLogger(__name__)
 
 
-def transform_data(raw_data: List[dict], user_id: int) -> dict:
+def transform_history_data(raw_data: List[dict], user_id: int) -> dict:
     """
     Transforms raw JSON Spotify data into a format compatible with insert_history function.
 
@@ -27,15 +27,7 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
     """
 
     # Initialize data
-    data = {
-        "Artists": [],
-        "Tracks": [],
-        "ArtistTracks": [],
-        "TrackPopularity": [],
-        "History": [],
-        "TrackImages": [],
-        "TrackPreviews": [],
-    }
+    data = {"History": []}
 
     # Transform raw_data
     for track_played in raw_data["items"]:
@@ -45,73 +37,8 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
         if not track:
             continue
 
-        artists = track.get("artists")
-        album: dict = track.get("album")
-        images = album.get("images")
         track_id: str = track.get("id")
-        track_name: str = track.get("name")
-        track_duration_ms = track.get("duration_ms")
-        track_popularity = track.get("popularity")
-        preview_url = track.get("preview_url")
         played_at = track_played.get("played_at")
-
-        for idx, artist in enumerate(artists):
-            artist: dict
-            artist_id = artist.get("id")
-            artist_name = artist.get("name")
-
-            data["Artists"].append(
-                {
-                    "id": artist_id,
-                    "name": artist_name,
-                }
-            )
-
-            data["ArtistTracks"].append(
-                {
-                    "artist_id": artist_id,
-                    "track_id": track_id,
-                    "is_primary": idx == 0,
-                }
-            )
-
-        data["Tracks"].append(
-            {
-                "id": track_id,
-                "name": track_name,
-                "duration_ms": track_duration_ms,
-            }
-        )
-
-        data["TrackPopularity"].append(
-            {
-                "id": track_id,
-                "date": played_at,
-                "popularity": track_popularity,
-            }
-        )
-
-        for image in images:
-            image: dict
-            height = image.get("height")
-            width = image.get("width")
-            url = image.get("url")
-
-            data["TrackImages"].append(
-                {
-                    "id": track_id,
-                    "height": height,
-                    "width": width,
-                    "url": url,
-                }
-            )
-
-        data["TrackPreviews"].append(
-            {
-                "id": track_id,
-                "url": preview_url,
-            }
-        )
 
         data["History"].append(
             {
@@ -124,8 +51,8 @@ def transform_data(raw_data: List[dict], user_id: int) -> dict:
     return data
 
 
-def verify_transformed_data_keys(data: dict):
-    """Verify that the transformed data contains the correct keys.
+def validate_transformed_history_data_keys(data: dict):
+    """Validate that the transformed data contains the correct keys.
 
     The keys should be the names of the tables in the database, and the values
     should be lists of dictionaries, where each dictionary is a row in the table.
@@ -137,65 +64,13 @@ def verify_transformed_data_keys(data: dict):
 
     logger.info(f"Verifying transformed data keys: {data}")
 
-    assert len(data) == 7, f"Transformed data should contain 5 tables: {data.keys()}"
-    expected_table_keys = [  # Expected table names
-        "Artists",
-        "Tracks",
-        "ArtistTracks",
-        "TrackPopularity",
-        "History",
-        "TrackImages",
-        "TrackPreviews",
-    ]
+    assert len(data) == 1, f"Transformed data should contain 1 table1: {data.keys()}"
+    expected_table_keys = ["History"]  # Expected table names
 
     # Verify that the expected table keys are present
     assert set(data.keys()) == set(expected_table_keys), (
         f"Transformed data should contain the following tables: "
         f"{expected_table_keys}, but instead contains {data.keys()}"
-    )
-
-    expected_artist_keys = ["id", "name"]
-    assert set(data["Artists"][0].keys()) == set(expected_artist_keys), (
-        f"Table 'Artists' should contain the following columns: "
-        f"{expected_artist_keys}, but instead contains "
-        f"{data['Artists'][0].keys()}"
-    )
-
-    expected_artist_track_keys = ["artist_id", "track_id", "is_primary"]
-    assert set(data["ArtistTracks"][0].keys()) == set(expected_artist_track_keys), (
-        f"Table 'ArtistTracks' should contain the following columns: "
-        f"{expected_artist_track_keys}, but instead contains "
-        f"{data['ArtistTracks'][0].keys()}"
-    )
-
-    expected_track_keys = ["id", "name", "duration_ms"]
-    assert set(data["Tracks"][0].keys()) == set(expected_track_keys), (
-        f"Table 'Tracks' should contain the following columns: "
-        f"{expected_track_keys}, but instead contains "
-        f"{data['Tracks'][0].keys()}"
-    )
-
-    expected_track_popularity_keys = ["id", "date", "popularity"]
-    assert set(data["TrackPopularity"][0].keys()) == set(
-        expected_track_popularity_keys,
-    ), (
-        f"Table 'TrackPopularity' should contain the following columns: "
-        f"{expected_track_popularity_keys}, but instead contains "
-        f"{data['TrackPopularity'][0].keys()}"
-    )
-
-    expected_track_image_keys = ["id", "height", "width", "url"]
-    assert set(data["TrackImages"][0].keys()) == set(expected_track_image_keys), (
-        f"Table 'TrackImages' should contain the following columns: "
-        f"{expected_track_image_keys}, but instead contains "
-        f"{data['TrackImages'][0].keys()}"
-    )
-
-    expected_track_preview_keys = ["id", "url"]
-    assert set(data["TrackPreviews"][0].keys()) == set(expected_track_preview_keys), (
-        f"Table 'TrackPreviews' should contain the following columns: "
-        f"{expected_track_preview_keys}, but instead contains "
-        f"{data['TrackPreviews'][0].keys()}"
     )
 
     expected_history_keys = ["user_id", "track_id", "played_at"]
@@ -206,8 +81,8 @@ def verify_transformed_data_keys(data: dict):
     )
 
 
-def verify_transformed_data_values(data: dict):
-    """Verify that the transformed data contains the correct values.
+def validate_transformed_history_data_values(data: dict):
+    """Validate that the transformed data contains the correct values.
 
     Args:
         data (dict): The transformed data to be verified.
