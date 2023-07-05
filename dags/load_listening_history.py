@@ -206,7 +206,8 @@ def transform_history(history: dict) -> dict:
         dict: The transformed listening history for all users whose history is not empty
             :: {"Artists": [], "Tracks": [], "ArtistTracks": [], "TrackPopularity": [], "History": [], ...}
     """
-    from src.utils.history_utils import transform_data
+    from src.utils.history_utils import transform_history_data
+    from src.utils.track_utils import transform_track_data
 
     def _flatten_transformed_histories(transformed_histories: List[dict]) -> dict:
         """Flattens a list of transformed histories into a single dict."""
@@ -230,8 +231,14 @@ def transform_history(history: dict) -> dict:
     transformed_histories = []
     for user_id in history:
         user_history = history[user_id]
-        transformed_history = transform_data(raw_data=user_history, user_id=user_id)
-        transformed_histories.append(transformed_history)
+        transformed_history = transform_history_data(
+            raw_data=user_history, user_id=user_id
+        )
+        transformed_tracks = transform_track_data(raw_track_data=user_history)
+        # Merge transformed_tracks with transformed_history
+        # TODO Separate history and track transforms and loads to separate tasks
+        transformed_data = {**transformed_history, **transformed_tracks}
+        transformed_histories.append(transformed_data)
 
     return _flatten_transformed_histories(transformed_histories)
 
@@ -264,6 +271,8 @@ def load_local_files_to_s3():
 
     bucket_name = Variable.get("bucket_name")
     local_dir = Path(TMP_DIR) / "history/spotify"
+    local_dir.mkdir(parents=True, exist_ok=True)
+
     files = [
         (user_dir, user_json)
         for user_dir in local_dir.iterdir()
@@ -389,7 +398,7 @@ def transform_track_features_data(tracks_features: List[dict]) -> dict:
     Returns:
         dict: A dict of transformed track features data for all tracks in the listening history of all users
     """
-    from src.utils.track_utils import transform_data
+    from src.utils.track_utils import transform_track_features_data as transform_data
 
     transformed_data = transform_data(tracks_features)
     logger.info(f"Transformed {len(transformed_data)} tracks from Spotify")

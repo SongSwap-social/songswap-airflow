@@ -122,8 +122,8 @@ def fetch_listening_history(
     return results
 
 
-def fetch_artists_data(artist_ids: List[str]) -> dict:
-    """Fetches artist data from Spotify for a list of artist IDs.
+def fetch_artists(artist_ids: List[str]) -> dict:
+    """Fetches artist data from Spotify for a list of artist IDs (max 50 artists)
 
     Args:
         artist_ids (list): List of artist IDs to fetch data for.
@@ -225,8 +225,153 @@ def fetch_artists_data(artist_ids: List[str]) -> dict:
     return artists_data
 
 
+def fetch_tracks(track_ids: List[str]) -> List[dict]:
+    """Fetches track data from Spotify for a list of track IDs (max 50 tracks)
+
+    Args:
+        track_ids (list): List of track IDs to fetch data for.
+
+    Returns:
+        list[dict]: The track data for the provided track IDs
+
+    Raises:
+        ValueError: If more than 50 track IDs are provided
+
+    Example response ::
+    [
+        {
+            "album": {
+                "album_type": "compilation",
+                "total_tracks": 9,
+                "available_markets": [
+                    "CA",
+                    "BR",
+                    "IT"
+                ],
+                "external_urls": {
+                    "spotify": "string"
+                },
+                "href": "string",
+                "id": "2up3OPMp9Tb4dAKM2erWXQ",
+                "images": [
+                    {
+                        "url": "https://i.scdn.co/image/ab67616d00001e02ff9ca10b55ce82ae553c8228",
+                        "height": 300,
+                        "width": 300
+                    }
+                ],
+                "name": "string",
+                "release_date": "1981-12",
+                "release_date_precision": "year",
+                "restrictions": {
+                    "reason": "market"
+                },
+                "type": "album",
+                "uri": "spotify:album:2up3OPMp9Tb4dAKM2erWXQ",
+                "copyrights": [
+                    {
+                        "text": "string",
+                        "type": "string"
+                    }
+                ],
+                "external_ids": {
+                    "isrc": "string",
+                    "ean": "string",
+                    "upc": "string"
+                },
+                "genres": [
+                    "Egg punk",
+                    "Noise rock"
+                ],
+                "label": "string",
+                "popularity": 0,
+                "album_group": "compilation",
+                "artists": [
+                    {
+                        "external_urls": {
+                            "spotify": "string"
+                        },
+                        "href": "string",
+                        "id": "string",
+                        "name": "string",
+                        "type": "artist",
+                        "uri": "string"
+                    }
+                ]
+            },
+            "artists": [
+                {
+                    "external_urls": {
+                        "spotify": "string"
+                    },
+                    "followers": {
+                        "href": "string",
+                        "total": 0
+                    },
+                    "genres": [
+                        "Prog rock",
+                        "Grunge"
+                    ],
+                    "href": "string",
+                    "id": "string",
+                    "images": [
+                        {
+                            "url": "https://i.scdn.co/image/ab67616d00001e02ff9ca10b55ce82ae553c8228",
+                            "height": 300,
+                            "width": 300
+                        }
+                    ],
+                    "name": "string",
+                    "popularity": 0,
+                    "type": "artist",
+                    "uri": "string"
+                }
+            ],
+            "available_markets": [
+                "string"
+            ],
+            "disc_number": 0,
+            "duration_ms": 0,
+            "explicit": false,
+            "external_ids": {
+                "isrc": "string",
+                "ean": "string",
+                "upc": "string"
+            },
+            "external_urls": {
+                "spotify": "string"
+            },
+            "href": "string",
+            "id": "string",
+            "is_playable": false,
+            "linked_from": {},
+            "restrictions": {
+                "reason": "string"
+            },
+            "name": "string",
+            "popularity": 0,
+            "preview_url": "string",
+            "track_number": 0,
+            "type": "track",
+            "uri": "string",
+            "is_local": false
+        }
+    ]
+    """
+    sp = spotipy.Spotify(oauth_manager=SPOTIFY_AUTH_MGR)
+    # Verify no more than 50 track IDs are provided
+    if len(track_ids) > 50:
+        raise ValueError("Can only fetch data for up to 50 tracks at a time")
+
+    # Fetch the track data
+    tracks_data = sp.tracks(track_ids)
+
+    logger.info(f"Fetched tracks data: length len(tracks_data)={len(tracks_data)}")
+    return tracks_data
+
+
 def fetch_tracks_features(track_ids: List[str]) -> List[dict]:
-    """Fetches track features from Spotify for a list of track IDs.
+    """Fetches track features from Spotify for a list of track IDs (max 100 tracks)
 
     Args:
         track_ids (list): List of track IDs to fetch features for.
@@ -236,10 +381,6 @@ def fetch_tracks_features(track_ids: List[str]) -> List[dict]:
 
     Raises:
         ValueError: If more than 100 track IDs are provided
-
-    Assumption:
-        - The results are returned in the same order as the track IDs provided.
-        - The track IDs provided are valid. The API does not return an error if an invalid ID is provided.
 
     Example response ::
         [
