@@ -4,7 +4,7 @@ from typing import List
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from src.utils.rds_utils import insert_bulk
-from src.utils.spotify_utils import fetch_artists_data
+from src.utils.spotify_utils import fetch_artists
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ def fetch_artists_data_with_dates(artists_and_dates: List[tuple]) -> List[dict]:
     # Fetch artist data for each chunk
     for i, chunk in enumerate(artists_and_dates_chunks):
         logger.info(f"Fetching chunk {i+1}/{len(artists_and_dates_chunks)}")
-        artists = fetch_artists_data([artist_id for artist_id, _ in chunk])["artists"]
+        artists = fetch_artists([artist_id for artist_id, _ in chunk])["artists"]
         # Add played_date to each artist
         # ASSUMPTION: The order of artists returned from the API is the same as the order of artist ids passed in.
         for artist, (_, played_at) in zip(artists, chunk):
