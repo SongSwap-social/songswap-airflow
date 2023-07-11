@@ -45,6 +45,15 @@
 # Feel free to modify this file to suit your needs.
 ---
 version: '3.8'
+x-songswap-common:
+  &songswap-common
+  environment:
+    &songswap-common-env
+    AIRFLOW_VERSION: ${AIRFLOW_VERSION}
+    SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID}
+    SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET}
+    SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI}
+
 x-airflow-common:
   &airflow-common
   # In order to add custom dependencies or upgrade provider packages you can use your extended image.
@@ -54,6 +63,7 @@ x-airflow-common:
   build: .
   environment:
     &airflow-common-env
+    <<: *songswap-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     # For backward compatibility, with Airflow <2.3
@@ -116,8 +126,6 @@ services:
   airflow-webserver:
     <<: *airflow-common
     command: webserver
-    env_file:
-      - .env
     ports:
       - "8080:8080"
     healthcheck:
@@ -135,8 +143,6 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
-    env_file:
-      - .env
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
       interval: 30s
@@ -152,8 +158,6 @@ services:
   airflow-worker:
     <<: *airflow-common
     command: celery worker
-    env_file:
-      - .env
     healthcheck:
       test:
         - "CMD-SHELL"
