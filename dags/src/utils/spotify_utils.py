@@ -4,17 +4,19 @@ from typing import List
 
 import spotipy
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from spotipy.oauth2 import SpotifyOAuth
+from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+handler = CacheFileHandler(cache_path="/tmp/.spotify_creds")
 SPOTIFY_AUTH_MGR = SpotifyOAuth(
     client_id=environ.get("SPOTIFY_CLIENT_ID"),
     client_secret=environ.get("SPOTIFY_CLIENT_SECRET"),
     redirect_uri=environ.get("SPOTIFY_REDIRECT_URI"),
     open_browser=False,
+    cache_handler=handler,
 )
 
 
@@ -213,7 +215,8 @@ def fetch_artists(artist_ids: List[str]) -> dict:
         }
     """
 
-    sp = spotipy.Spotify(oauth_manager=SPOTIFY_AUTH_MGR)
+    token = SPOTIFY_AUTH_MGR.cache_handler.get_cached_token()
+    sp = spotipy.Spotify(auth=token["access_token"])
     # Verify there are no more than 50 artist IDs
     if len(artist_ids) > 50:
         raise ValueError("Can only fetch data for up to 50 artists at a time")
@@ -358,7 +361,8 @@ def fetch_tracks(track_ids: List[str]) -> List[dict]:
         }
     ]
     """
-    sp = spotipy.Spotify(oauth_manager=SPOTIFY_AUTH_MGR)
+    token = SPOTIFY_AUTH_MGR.cache_handler.get_cached_token()
+    sp = spotipy.Spotify(auth=token["access_token"])
     # Verify no more than 50 track IDs are provided
     if len(track_ids) > 50:
         raise ValueError("Can only fetch data for up to 50 tracks at a time")
@@ -407,7 +411,8 @@ def fetch_tracks_features(track_ids: List[str]) -> List[dict]:
         ]
     """
 
-    sp = spotipy.Spotify(oauth_manager=SPOTIFY_AUTH_MGR)
+    token = SPOTIFY_AUTH_MGR.cache_handler.get_cached_token()
+    sp = spotipy.Spotify(auth=token["access_token"])
     # Verify there are no more than 100 track IDs
     if len(track_ids) > 100:
         raise ValueError("Can only fetch data for up to 100 tracks at a time")
