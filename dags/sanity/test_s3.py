@@ -11,8 +11,6 @@ default_args = {
     "owner": "airflow",
     "depends_on_past": False,
     "start_date": datetime(2023, 6, 1),
-    "retries": 1,
-    "retry_delay": timedelta(minutes=1),
 }
 
 
